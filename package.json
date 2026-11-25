@@ -4,13 +4,13 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Peer-to-peer, end-to-end encrypted letters you can open once a day.",
+  "packageManager": "pnpm@12.9.0",
   "scripts": {
-    "dev": "concurrently -k -n relay,web -c blue,magenta \"tsx server/main.ts\" \"vite --port 4731 --strictPort\"",
-    "dev:relay": "tsx server/main.ts",
-    "dev:web": "vite --port 4731 --strictPort",
-    "start": "tsx server/main.ts",
+    "dev": "vite --port 4731 --strictPort",
     "build": "tsc --noEmit && vite build",
+    "build:pages": "GITHUB_PAGES=true GITHUB_REPOSITORY=freddie-freeloader/hedwig tsc --noEmit && GITHUB_PAGES=true GITHUB_REPOSITORY=freddie-freeloader/hedwig vite build",
     "test": "vitest run",
+    "test:e2e": "playwright test",
     "lint": "oxlint",
     "typecheck": "tsc --noEmit"
   },
@@ -19,14 +19,17 @@
     "@fontsource/outfit": "^5.3.0",
     "@noble/ciphers": "^2.4.0",
     "@noble/curves": "^2.4.0",
-    "@noble/hashes": "^2.4.0",
+    "@noble/hashes": "1.8.0",
+    "drand-client": "^1.4.2",
     "idb": "^8.0.4",
     "qrcode": "^1.5.4",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
+    "tlock-js": "^0.9.0",
     "ws": "^8.23.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.65.1",
     "@tailwindcss/vite": "^4.3.5",
     "@types/node": "^24.19.2",
     "@types/qrcode": "^1.5.6",
@@ -40,6 +43,7 @@
     "tsx": "^4.23.15",
     "typescript": "~7.0.2",
     "vite": "^8.3.6",
+    "vite-plugin-elm": "^4.0.0",
     "vitest": "^5.1.2"
   }
 }
