@@ -25,6 +25,13 @@ port letterDecrypted : (E.Value -> msg) -> Sub msg
 port bridgeError : (E.Value -> msg) -> Sub msg
 port copyText : String -> Cmd msg
 port debugLog : (E.Value -> msg) -> Sub msg
+port saveDraft : E.Value -> Cmd msg
+port saveContact : E.Value -> Cmd msg
+port deleteContact : String -> Cmd msg
+port stateLoaded : (E.Value -> msg) -> Sub msg
+port exportIdentity : () -> Cmd msg
+port identityExported : (E.Value -> msg) -> Sub msg
+port importIdentity : String -> Cmd msg
 
 
 type alias Flags =
@@ -62,6 +69,26 @@ type alias Model =
     , inbox : List Letter
     , draftEnvelope : String
     , debugLogs : List String
+    , contacts : List Contact
+    , drafts : List Draft
+    , sealedEnvelopes : List String
+    , identityBackup : String
+    , importBackup : String
+    }
+
+
+type alias Contact =
+    { name : String
+    , address : String
+    }
+
+
+type alias Draft =
+    { recipient : String
+    , subject : String
+    , body : String
+    , releaseHours : String
+    , releaseSeconds : String
     }
 
 
@@ -77,6 +104,7 @@ type Msg
     | CopyAddress
     | CopyInvitation
     | CopyAnswer
+    | CopyBackup
     | NameChanged String
     | SaveIdentity
     | IdentityResult D.Value
@@ -101,6 +129,14 @@ type Msg
     | BridgeErrorResult D.Value
     | DebugLogResult D.Value
     | ClearDebugLog
+    | StateLoadedResult D.Value
+    | ExportIdentity
+    | IdentityExportedResult D.Value
+    | ImportIdentityChanged String
+    | ImportIdentity
+    | SaveDraft
+    | AddRecipientContact
+    | SelectRecipient String
 
 
 main : Program Flags Model Msg
@@ -137,6 +173,11 @@ init flags =
       , inbox = []
       , draftEnvelope = ""
       , debugLogs = []
+      , contacts = []
+      , drafts = []
+      , sealedEnvelopes = []
+      , identityBackup = ""
+      , importBackup = ""
       }
     , initializeIdentity (E.object [ ( "name", E.string "" ) ])
     )
@@ -154,6 +195,8 @@ subscriptions _ =
         , letterDecrypted LetterDecryptedResult
         , bridgeError BridgeErrorResult
         , debugLog DebugLogResult
+        , stateLoaded StateLoadedResult
+        , identityExported IdentityExportedResult
         ]
 
 
@@ -181,6 +224,9 @@ update msg model =
 
         CopyAnswer ->
             ( model, copyText model.answer )
+
+        CopyBackup ->
+            ( model, copyText model.identityBackup )
 
         NameChanged value ->
             ( { model | name = value }, Cmd.none )
@@ -368,6 +414,122 @@ update msg model =
         ClearDebugLog ->
             ( { model | debugLogs = [] }, Cmd.none )
 
+        SaveDraft ->
+            ( model
+            , saveDraft
+                (E.object
+                    [ ( "recipient", E.string model.recipient )
+                    , ( "subject", E.string model.subject )
+                    , ( "body", E.string model.body )
+                    , ( "releaseHours", E.string model.releaseHours )
+                    , ( "releaseSeconds", E.string model.releaseSeconds )
+                    ]
+                )
+            )
+
+        AddRecipientContact ->
+            ( model
+            , saveContact
+                (E.object
+                    [ ( "name", E.string "Recipient" )
+                    , ( "address", E.string model.recipient )
+                    ]
+                )
+            )
+
+        SelectRecipient address ->
+            ( { model | recipient = address }, Cmd.none )
+
+        ExportIdentity ->
+            ( model, exportIdentity () )
+
+        IdentityExportedResult value ->
+            case D.decodeValue (D.field "backup" D.string) value of
+                Ok backup ->
+                    ( { model | identityBackup = backup, notice = "Identity backup ready" }, Cmd.none )
+                Err _ ->
+                    ( model, Cmd.none )
+
+        ImportIdentityChanged value ->
+            ( { model | importBackup = value }, Cmd.none )
+
+        ImportIdentity ->
+            ( model, importIdentity model.importBackup )
+
+        StateLoadedResult value ->
+            let
+                contactDecoder =
+                    D.map2 Contact
+                        (D.field "name" D.string)
+                        (D.field "address" D.string)
+                draftDecoder =
+                    D.map5 Draft
+                        (D.field "recipient" D.string)
+                        (D.field "subject" D.string)
+                        (D.field "body" D.string)
+                        (D.field "releaseHours" D.string)
+                        (D.field "releaseSeconds" D.string)
+                decoder =
+                    D.map4
+                        (\contacts drafts sealed inbox ->
+                            { contacts = contacts
+                            , drafts = drafts
+                            , sealed = sealed
+                            , inbox = inbox
+                            })
+                        (D.field "contacts" (D.list contactDecoder))
+                        (D.field "drafts" (D.list draftDecoder))
+                        (D.field "sealed" (D.list D.string))
+                        (D.field "opened"
+                            (D.list
+                                (D.map6 Letter
+                                    (D.field "id" D.string)
+                                    (D.field "from" D.string)
+                                    (D.field "subject" D.string)
+                                    (D.field "body" D.string)
+                                    (D.field "releaseRound" D.int)
+                                    (D.field "sentAt" D.string)
+                                )
+                            )
+                        )
+            in
+            case D.decodeValue decoder value of
+                Ok state ->
+                    let
+                        firstDraft =
+                            List.head state.drafts
+                        restored =
+                            Maybe.map
+                                (\draft ->
+                                    { model
+                                        | recipient = draft.recipient
+                                        , subject = draft.subject
+                                        , body = draft.body
+                                        , releaseHours = draft.releaseHours
+                                        , releaseSeconds = draft.releaseSeconds
+                                    }
+                                )
+                                firstDraft
+                                |> Maybe.withDefault model
+                    in
+                    ( { restored
+                        | contacts = state.contacts
+                        , drafts = state.drafts
+                        , sealedEnvelopes = state.sealed
+                        , inbox = state.inbox
+                        , draftEnvelope =
+                            case List.head state.sealed of
+                                Just envelope ->
+                                    envelope
+                                Nothing ->
+                                    ""
+                        , notice = "Saved state restored"
+                      }
+                    , Cmd.none
+                    )
+                Err _ ->
+                    ( model, Cmd.none )
+
 
 view : Model -> Html Msg
 view model =
@@ -451,6 +613,45 @@ identityCard model =
                         , onClick SaveIdentity
                         ]
                         [ text "Save" ]
+                    ]
+                , div [ class "mt-5 grid gap-3 md:grid-cols-2" ]
+                    [ div [ class "rounded-xl border border-line bg-paper p-4" ]
+                        [ p [ class "text-sm font-medium text-ink" ] [ text "Backup this owl" ]
+                        , div [ class "mt-2 flex gap-2" ]
+                            [ button
+                                [ class "rounded-xl border border-line px-3 py-2 text-sm text-ink"
+                                , onClick ExportIdentity
+                                ]
+                                [ text "Create backup" ]
+                            , button
+                                [ class "rounded-xl border border-line px-3 py-2 text-sm text-ink"
+                                , onClick CopyBackup
+                                ]
+                                [ text "Copy backup" ]
+                            ]
+                        , textarea
+                            [ class "mt-3 min-h-20 w-full rounded-xl border border-line bg-sheet px-3 py-2 font-mono text-xs text-ink"
+                            , rows 4
+                            , value model.identityBackup
+                            ]
+                            []
+                        ]
+                    , div [ class "rounded-xl border border-line bg-paper p-4" ]
+                        [ p [ class "text-sm font-medium text-ink" ] [ text "Restore a backup" ]
+                        , textarea
+                            [ class "mt-2 min-h-20 w-full rounded-xl border border-line bg-sheet px-3 py-2 font-mono text-xs text-ink"
+                            , rows 4
+                            , value model.importBackup
+                            , onInput ImportIdentityChanged
+                            , placeholder "Paste backup JSON"
+                            ]
+                            []
+                        , button
+                            [ class "mt-2 rounded-xl bg-moss px-3 py-2 text-sm text-white"
+                            , onClick ImportIdentity
+                            ]
+                            [ text "Restore owl" ]
+                        ]
                     ]
                 ]
             ]
@@ -543,6 +744,23 @@ composerCard model =
             , onInput RecipientChanged
             ]
             []
+        , div [ class "mt-2 flex flex-wrap gap-2" ]
+               [ button
+                   [ class "rounded-xl border border-line px-3 py-2 text-xs text-ink"
+                   , onClick AddRecipientContact
+                   ]
+                   [ text "Save recipient" ]
+               , button
+                   [ class "rounded-xl border border-line px-3 py-2 text-xs text-ink"
+                   , onClick SaveDraft
+                   ]
+                   [ text "Save draft" ]
+               ]
+        , if List.isEmpty model.contacts then
+               text ""
+          else
+               div [ class "mt-3 flex flex-wrap gap-2" ]
+                   (List.map contactButton model.contacts)
         , label [ class "mt-4 block text-sm font-medium text-ink" ] [ text "Subject" ]
         , input
             [ class "mt-1 w-full rounded-xl border border-line bg-paper px-3 py-2.5 text-ink"
@@ -612,6 +830,15 @@ releaseButton model hours label =
         , onClick (ReleaseHoursChanged hours)
         ]
         [ text label ]
+
+
+contactButton : Contact -> Html Msg
+contactButton contact =
+    button
+        [ class "max-w-full truncate rounded-full border border-line bg-paper px-3 py-2 text-xs text-ink"
+        , onClick (SelectRecipient contact.address)
+        ]
+        [ text contact.name ]
 
 
 inboxCard : Model -> Html Msg

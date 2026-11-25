@@ -33,6 +33,12 @@ type ElmApp = {
     letterDecrypted: { send: (payload: unknown) => void }
     bridgeError: { send: (payload: unknown) => void }
     debugLog: { send: (payload: unknown) => void }
+    saveDraft: { send: (payload: unknown) => void; subscribe?: (callback: (payload: unknown) => void) => void }
+    saveContact: { send: (payload: unknown) => void; subscribe?: (callback: (payload: unknown) => void) => void }
+    stateLoaded: { send: (payload: unknown) => void }
+    exportIdentity: { send: (payload: unknown) => void; subscribe?: (callback: (payload: unknown) => void) => void }
+    identityExported: { send: (payload: unknown) => void }
+    importIdentity: { send: (payload: unknown) => void; subscribe?: (callback: (payload: unknown) => void) => void }
   }
 }
 
@@ -114,6 +120,7 @@ export class HedwigBridge {
   private identity: Identity | null = null
   private peer: RTCPeerConnection | null = null
   private channel: RTCDataChannel | null = null
+  private readonly receivedEnvelopeIds = new Set<string>()
 
   constructor(app: ElmApp) {
     this.app = app
@@ -141,8 +148,20 @@ export class HedwigBridge {
     app.ports.decryptEnvelope.subscribe?.((payload) => {
       void this.decryptEnvelope(String(payload))
     })
+    app.ports.saveDraft.subscribe?.((payload) => {
+      this.saveDraft(payload as Record<string, string>)
+    })
+    app.ports.saveContact.subscribe?.((payload) => {
+      this.saveContact(payload as Record<string, string>)
+    })
+    app.ports.exportIdentity.subscribe?.(() => {
+      this.exportIdentity()
+    })
+    app.ports.importIdentity.subscribe?.((payload) => {
+      void this.importIdentity(String(payload))
+    })
 
-    void this.initializeIdentity({})
+    void this.initializeIdentity({}).then(() => this.loadState())
   }
 
   private send(port: string, payload: unknown): void {
@@ -173,6 +192,12 @@ export class HedwigBridge {
         break
       case 'debugLog':
         this.app.ports.debugLog.send(payload)
+        break
+      case 'stateLoaded':
+        this.app.ports.stateLoaded.send(payload)
+        break
+      case 'identityExported':
+        this.app.ports.identityExported.send(payload)
         break
     }
   }
@@ -250,6 +275,114 @@ export class HedwigBridge {
     localStorage.setItem('hedwig-mvp-identity', JSON.stringify(stored))
   }
 
+  private readArray(key: string): unknown[] {
+    try {
+      const value = JSON.parse(localStorage.getItem(key) ?? '[]')
+      return Array.isArray(value) ? value : []
+    } catch {
+      return []
+    }
+  }
+
+  private loadState(): void {
+    const sealed = this.readArray('hedwig-sealed') as string[]
+    const opened = this.readArray('hedwig-opened') as Array<{
+      id: string
+      from: string
+      subject: string
+      body: string
+      releaseRound: number
+      sentAt: string
+    }>
+    for (const envelope of sealed) {
+      try {
+        const outer = JSON.parse(envelope) as OuterEnvelope
+        if (outer.envelopeId) this.receivedEnvelopeIds.add(outer.envelopeId)
+      } catch {
+        // Ignore malformed legacy state.
+      }
+    }
+    for (const letter of opened) {
+      if (letter.id) this.receivedEnvelopeIds.add(letter.id)
+    }
+    this.send('stateLoaded', {
+      contacts: this.readArray('hedwig-contacts'),
+      drafts: this.readArray('hedwig-drafts'),
+      sealed,
+      opened,
+    })
+  }
+
+  private saveDraft(draft: Record<string, string>): void {
+    if (!draft.recipient && !draft.subject && !draft.body) return
+    const drafts = this.readArray('hedwig-drafts') as Record<string, string>[]
+    const next = [draft, ...drafts.filter((item) =>
+      item.recipient !== draft.recipient
+      || item.subject !== draft.subject
+    )].slice(0, 20)
+    localStorage.setItem('hedwig-drafts', JSON.stringify(next))
+    this.log('Draft saved locally')
+  }
+
+  private saveContact(contact: Record<string, string>): void {
+    const address = (contact.address ?? '').trim()
+    if (!parseAddress(address)) {
+      this.error('Cannot save an invalid owl address')
+      return
+    }
+    const contacts = this.readArray('hedwig-contacts') as Array<{ name: string; address: string }>
+    const name = (contact.name ?? '').trim() || 'Recipient'
+    const next = [
+      { name, address },
+      ...contacts.filter((item) => item.address !== address),
+    ].slice(0, 50)
+    localStorage.setItem('hedwig-contacts', JSON.stringify(next))
+    this.log(`Contact saved: ${name}`)
+    this.loadState()
+  }
+
+  private exportIdentity(): void {
+    if (!this.identity) {
+      this.error('Identity is not ready')
+      return
+    }
+    this.persistIdentity()
+    const backup = localStorage.getItem('hedwig-mvp-identity')
+    this.send('identityExported', { backup: backup ?? '' })
+    this.log('Identity backup exported')
+  }
+
+  private async importIdentity(serialized: string): Promise<void> {
+    try {
+      const stored = JSON.parse(serialized) as StoredIdentity
+      if (!stored.name || !stored.address || !stored.edSecret || !stored.edPublic || !stored.xSecret || !stored.xPublic) {
+        throw new Error('Identity backup is incomplete')
+      }
+      const edSecret = decodeBase64Url(stored.edSecret)
+      const edPublic = decodeBase64Url(stored.edPublic)
+      const xSecret = decodeBase64Url(stored.xSecret)
+      const xPublic = decodeBase64Url(stored.xPublic)
+      if (!edSecret || !edPublic || !xSecret || !xPublic) throw new Error('Identity backup is invalid')
+      if (stored.address !== makeAddress(edPublic, xPublic)) {
+        throw new Error('Identity address does not match backup keys')
+      }
+      this.identity = {
+        name: stored.name,
+        address: stored.address,
+        edSecret,
+        edPublic,
+        xSecret,
+        xPublic,
+      }
+      this.persistIdentity()
+      this.send('identityLoaded', { address: stored.address, name: stored.name })
+      this.loadState()
+      this.log('Identity backup restored')
+    } catch (caught) {
+      this.error(caught instanceof Error ? caught.message : 'Identity backup could not be restored')
+    }
+  }
+
   private ensurePeer(): RTCPeerConnection {
     if (this.peer) return this.peer
     const peer = new RTCPeerConnection({
@@ -287,6 +420,15 @@ export class HedwigBridge {
         }
         const envelope = payload as OuterEnvelope
         if (envelope.v !== 1 || !envelope.tlock) throw new Error('Invalid received envelope')
+        if (this.receivedEnvelopeIds.has(envelope.envelopeId)) {
+          this.log(`Duplicate envelope ignored: ${envelope.envelopeId}`)
+          channel.send(JSON.stringify({ type: 'delivery-confirmation', envelopeId: envelope.envelopeId }))
+          return
+        }
+        this.receivedEnvelopeIds.add(envelope.envelopeId)
+        const sealed = this.readArray('hedwig-sealed') as string[]
+        sealed.unshift(JSON.stringify(envelope))
+        localStorage.setItem('hedwig-sealed', JSON.stringify(sealed.slice(0, 100)))
         this.log(`Envelope received: ${envelope.envelopeId}`)
         channel.send(JSON.stringify({ type: 'delivery-confirmation', envelopeId: envelope.envelopeId }))
         this.log(`Send confirmation returned for ${envelope.envelopeId}`)
@@ -482,14 +624,35 @@ export class HedwigBridge {
       )
       if (!opened) throw new Error('Letter could not be decrypted')
       const content = JSON.parse(decodeUtf8(opened)) as { subject: string; body: string; sentAt: string }
-      this.send('letterDecrypted', {
+      const letter = {
         id: inner.id,
         from: inner.fromName || inner.from,
         subject: content.subject,
         body: content.body,
         releaseRound: inner.releaseRound,
         sentAt: content.sentAt,
-      })
+      }
+      if (this.receivedEnvelopeIds.has(inner.id)) {
+        // Keep replay protection while allowing the persisted opened letter to surface.
+        const existing = this.readArray('hedwig-opened') as Array<typeof letter>
+        if (!existing.some((item) => item.id === inner.id)) {
+          existing.unshift(letter)
+          localStorage.setItem('hedwig-opened', JSON.stringify(existing.slice(0, 100)))
+        }
+      }
+      const sealed = this.readArray('hedwig-sealed') as string[]
+      localStorage.setItem(
+        'hedwig-sealed',
+        JSON.stringify(sealed.filter((serialized) => {
+          try {
+            return (JSON.parse(serialized) as OuterEnvelope).envelopeId !== inner.id
+          } catch {
+            return true
+          }
+        })),
+      )
+      this.send('letterDecrypted', letter)
+      this.loadState()
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : 'Could not open letter'
       if (/round|future|not yet|chain/i.test(message)) {
