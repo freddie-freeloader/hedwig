@@ -1,4 +1,5 @@
 allowBuilds:
+  elm: true
   esbuild: true
 minimumReleaseAgeExclude:
   - '@vitest/mocker@5.1.2'

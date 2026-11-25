@@ -230,6 +230,9 @@ importers:
       concurrently:
         specifier: ^10.0.7
         version: 10.0.7
+      elm:
+        specifier: 0.19.2-0
+        version: 0.19.2-0
       oxlint:
         specifier: ^1.90.0
         version: 1.95.0
@@ -290,6 +293,31 @@ packages:
   '@babel/types@7.29.15':
     resolution: {integrity: sha512-/XKpKDakL//LZ66bq1XsZOswuqeI5MZqPLDu18o3XdkU1fNJ7bdPtzgnc4ZNS+bBGHV0FJG8jjb8SwcC3nNVQQ==}
     engines: {node: '>=6.9.0'}
+
+  '@elm_binaries/darwin_arm64@0.19.2-0':
+    resolution: {integrity: sha512-vhgvWAgc+jkB/oSCqI0BK1w908ivNbV6OBWIGtJgbzAXFh6RYLcGdE04+X6CTLgj+u5ufl81lsnMG6lWEMzbJg==}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@elm_binaries/darwin_x64@0.19.2-0':
+    resolution: {integrity: sha512-CQub4GhTa9nOHkUpi4eVGy34mxhfQOpVteLWkgsFwSHxXathKzNaOR9W7nVHR1iKEMBNcYJpXS2MoQognOUMkA==}
+    cpu: [x64]
+    os: [darwin]
+
+  '@elm_binaries/linux_arm64@0.19.2-0':
+    resolution: {integrity: sha512-50LdOV2ddvgBqcgfVKC3yCKg3/3RQdkfE7Be5k7Zj2xYLALQolk3X2ualXUmXIbP6Zo1xYKymDAfa/M1PTF+dw==}
+    cpu: [arm64]
+    os: [linux]
+
+  '@elm_binaries/linux_x64@0.19.2-0':
+    resolution: {integrity: sha512-03EXHZZBCEFcKKh2kKUGPsFysKXnHANYw2XubBwT3Vj/5uOI/doG0g8kij5ng8n50vma/pNwAWqvVQLSRDmPMA==}
+    cpu: [x64]
+    os: [linux]
+
+  '@elm_binaries/win32_x64@0.19.2-0':
+    resolution: {integrity: sha512-FCzv6KAlo/L2/FZe3rsIH5dgFfljlgKWpMUDxVgNm1mFKep4TeFEnwRlSUh7hFnKCDVyjUL9oNL+x4OwYr3KWg==}
+    cpu: [x64]
+    os: [win32]
 
   '@emnapi/core@2.0.0-beta.2':
     resolution: {integrity: sha512-MzCVoWtcg4Pm2B3je5mMvYMvj3MmBKw+fU7vbsJc9/iT8ip6/eYIHo/Dsm/mr+wsHB6SEyJDuxB09Yy6r/8+4A==}
@@ -1129,6 +1157,11 @@ packages:
     resolution: {integrity: sha512-jeNJmrVplfgIA/GVndxxJ5mo8y63BS2pEdNhk1siU4pQ+z/BnxsqRnxjH9ag1ip887s12SEgo0MTZPbQNz27NA==}
     engines: {node: '>= 10.4.0'}
 
+  elm@0.19.2-0:
+    resolution: {integrity: sha512-a2N4WJ6ge+cXOemAgo6tu8gN17cIzzitYoPcJRpvbiPbay1+BfQAv9wyWtgTyR3YkrduN5oQwzLgSIaUBZwjYQ==}
+    engines: {node: '>=7.0.0'}
+    hasBin: true
+
   emoji-regex@10.6.0:
     resolution: {integrity: sha512-toUI84YS5YmxW219erniWD0CIVOo46xGKColeNQRgOzDorgBi1v4D71/OFzgD9GO2UGKIv1C3Sp8DAn0+j5w7A==}
 
@@ -1678,6 +1711,21 @@ snapshots:
     dependencies:
       '@babel/helper-string-parser': 7.29.15
       '@babel/helper-validator-identifier': 7.29.7
+
+  '@elm_binaries/darwin_arm64@0.19.2-0':
+    optional: true
+
+  '@elm_binaries/darwin_x64@0.19.2-0':
+    optional: true
+
+  '@elm_binaries/linux_arm64@0.19.2-0':
+    optional: true
+
+  '@elm_binaries/linux_x64@0.19.2-0':
+    optional: true
+
+  '@elm_binaries/win32_x64@0.19.2-0':
+    optional: true
 
   '@emnapi/core@2.0.0-beta.2':
     dependencies:
@@ -2229,6 +2277,14 @@ snapshots:
       isomorphic-fetch: 3.0.0
     transitivePeerDependencies:
       - encoding
+
+  elm@0.19.2-0:
+    optionalDependencies:
+      '@elm_binaries/darwin_arm64': 0.19.2-0
+      '@elm_binaries/darwin_x64': 0.19.2-0
+      '@elm_binaries/linux_arm64': 0.19.2-0
+      '@elm_binaries/linux_x64': 0.19.2-0
+      '@elm_binaries/win32_x64': 0.19.2-0
 
   emoji-regex@10.6.0: {}
 
