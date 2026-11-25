@@ -32,6 +32,8 @@ port stateLoaded : (E.Value -> msg) -> Sub msg
 port exportIdentity : () -> Cmd msg
 port identityExported : (E.Value -> msg) -> Sub msg
 port importIdentity : String -> Cmd msg
+port retryEnvelope : String -> Cmd msg
+port outboxUpdated : (E.Value -> msg) -> Sub msg
 
 
 type alias Flags =
@@ -47,6 +49,16 @@ type alias Letter =
     , body : String
     , releaseRound : Int
     , sentAt : String
+    }
+
+
+type alias OutboxItem =
+    { id : String
+    , subject : String
+    , status : String
+    , envelope : String
+    , createdAt : String
+    , error : String
     }
 
 
@@ -74,6 +86,7 @@ type alias Model =
     , sealedEnvelopes : List String
     , identityBackup : String
     , importBackup : String
+    , outbox : List OutboxItem
     }
 
 
@@ -94,12 +107,20 @@ type alias Draft =
 
 type Page
     = Desk
+    | Owl
+    | Compose
+    | Inbox
+    | Outbox
     | Help
 
 
 type Msg
     = ToggleTheme
     | ShowDesk
+    | ShowOwl
+    | ShowCompose
+    | ShowInbox
+    | ShowOutbox
     | ShowHelp
     | CopyAddress
     | CopyInvitation
@@ -129,6 +150,7 @@ type Msg
     | BridgeErrorResult D.Value
     | DebugLogResult D.Value
     | ClearDebugLog
+    | RetryEnvelope String
     | StateLoadedResult D.Value
     | ExportIdentity
     | IdentityExportedResult D.Value
@@ -153,10 +175,12 @@ init : Flags -> ( Model, Cmd Msg )
 init flags =
     ( { location = flags.location
       , page =
-            if String.contains "#help" flags.location then
-                Help
-            else
-                Desk
+            if String.contains "#help" flags.location then Help
+            else if String.contains "#outbox" flags.location then Outbox
+            else if String.contains "#compose" flags.location then Compose
+            else if String.contains "#inbox" flags.location then Inbox
+            else if String.contains "#owl" flags.location then Owl
+            else Desk
       , theme = if flags.theme == "light" then "light" else "dark"
       , name = ""
       , address = ""
@@ -178,6 +202,7 @@ init flags =
       , sealedEnvelopes = []
       , identityBackup = ""
       , importBackup = ""
+      , outbox = []
       }
     , initializeIdentity (E.object [ ( "name", E.string "" ) ])
     )
@@ -197,6 +222,7 @@ subscriptions _ =
         , debugLog DebugLogResult
         , stateLoaded StateLoadedResult
         , identityExported IdentityExportedResult
+        , outboxUpdated StateLoadedResult
         ]
 
 
@@ -212,6 +238,18 @@ update msg model =
 
         ShowDesk ->
             ( { model | page = Desk }, Cmd.none )
+
+        ShowOwl ->
+            ( { model | page = Owl }, Cmd.none )
+
+        ShowCompose ->
+            ( { model | page = Compose }, Cmd.none )
+
+        ShowInbox ->
+            ( { model | page = Inbox }, Cmd.none )
+
+        ShowOutbox ->
+            ( { model | page = Outbox }, Cmd.none )
 
         ShowHelp ->
             ( { model | page = Help }, Cmd.none )
@@ -414,6 +452,9 @@ update msg model =
         ClearDebugLog ->
             ( { model | debugLogs = [] }, Cmd.none )
 
+        RetryEnvelope envelopeId ->
+            ( model, retryEnvelope envelopeId )
+
         SaveDraft ->
             ( model
             , saveDraft
@@ -469,13 +510,22 @@ update msg model =
                         (D.field "body" D.string)
                         (D.field "releaseHours" D.string)
                         (D.field "releaseSeconds" D.string)
+                outboxDecoder =
+                    D.map6 OutboxItem
+                        (D.field "id" D.string)
+                        (D.field "subject" D.string)
+                        (D.field "status" D.string)
+                        (D.field "envelope" D.string)
+                        (D.field "createdAt" D.string)
+                        (D.field "error" D.string)
                 decoder =
-                    D.map4
-                        (\contacts drafts sealed inbox ->
+                    D.map5
+                        (\contacts drafts sealed inbox outbox ->
                             { contacts = contacts
                             , drafts = drafts
                             , sealed = sealed
                             , inbox = inbox
+                            , outbox = outbox
                             })
                         (D.field "contacts" (D.list contactDecoder))
                         (D.field "drafts" (D.list draftDecoder))
@@ -492,6 +542,7 @@ update msg model =
                                 )
                             )
                         )
+                        (D.field "outbox" (D.list outboxDecoder))
             in
             case D.decodeValue decoder value of
                 Ok state ->
@@ -517,6 +568,7 @@ update msg model =
                         , drafts = state.drafts
                         , sealedEnvelopes = state.sealed
                         , inbox = state.inbox
+                        , outbox = state.outbox
                         , draftEnvelope =
                             case List.head state.sealed of
                                 Just envelope ->
@@ -550,6 +602,26 @@ view model =
                     [ text "Desk" ]
                 , button
                     [ class "rounded-full border border-line px-3 py-2 text-sm text-ink-soft"
+                    , onClick ShowOwl
+                    ]
+                    [ text "Owl" ]
+                , button
+                    [ class "rounded-full border border-line px-3 py-2 text-sm text-ink-soft"
+                    , onClick ShowCompose
+                    ]
+                    [ text "Compose" ]
+                , button
+                    [ class "rounded-full border border-line px-3 py-2 text-sm text-ink-soft"
+                    , onClick ShowInbox
+                    ]
+                    [ text ("Inbox (" ++ String.fromInt (List.length model.inbox + (if model.draftEnvelope == "" then 0 else 1)) ++ ")") ]
+                , button
+                    [ class "rounded-full border border-line px-3 py-2 text-sm text-ink-soft"
+                    , onClick ShowOutbox
+                    ]
+                    [ text ("Outbox (" ++ String.fromInt (List.length model.outbox) ++ ")") ]
+                , button
+                    [ class "rounded-full border border-line px-3 py-2 text-sm text-ink-soft"
                     , onClick ShowHelp
                     ]
                     [ text "Help & FAQ" ]
@@ -568,14 +640,36 @@ view model =
         , case model.page of
             Desk ->
                 div []
-                    [ identityCard model
-                    , div [ class "mt-5 grid gap-5 lg:grid-cols-[0.9fr_1.1fr]" ]
-                        [ div [ class "space-y-5" ]
-                            [ connectionCard model
-                            , inboxCard model
+                    [ div [ class "grid gap-5 md:grid-cols-2" ]
+                        [ div [ class "rounded-2xl border border-line bg-sheet p-6" ]
+                            [ p [ class "text-xs font-semibold uppercase tracking-widest text-gold" ] [ text "Desk" ]
+                            , h1 [ class "mt-2 font-serif text-4xl text-ink" ] [ text "Ready for post" ]
+                            , p [ class "mt-3 leading-relaxed text-ink-soft" ] [ text ("Signed in as " ++ (if model.name == "" then "My owl" else model.name)) ]
+                            , span [ class "mt-5 inline-block rounded-full border border-line px-3 py-2 text-xs text-ink-soft" ] [ text model.connectionStatus ]
                             ]
-                        , composerCard model
+                        , div [ class "rounded-2xl border border-line bg-sheet p-6" ]
+                            [ p [ class "text-xs font-semibold uppercase tracking-widest text-gold" ] [ text "Quick actions" ]
+                            , div [ class "mt-4 grid gap-3" ]
+                                [ tabButton "Connect another owl" ShowOwl
+                                , tabButton "Write a letter" ShowCompose
+                                , tabButton ("Open inbox (" ++ String.fromInt (List.length model.inbox + (if model.draftEnvelope == "" then 0 else 1)) ++ ")") ShowInbox
+                                , tabButton ("Review outbox (" ++ String.fromInt (List.length model.outbox) ++ ")") ShowOutbox
+                                ]
+                            ]
                         ]
+                    ]
+            Owl ->
+                div [ class "mx-auto max-w-4xl" ]
+                    [ identityCard model
+                    , div [ class "mt-5" ] [ connectionCard model ]
+                    ]
+            Compose ->
+                div [ class "mx-auto max-w-3xl" ] [ composerCard model ]
+            Inbox ->
+                div [ class "mx-auto max-w-3xl" ] [ inboxCard model ]
+            Outbox ->
+                div [ class "mx-auto max-w-3xl" ]
+                    [ outboxCard model
                     , debugLogCard model
                     ]
             Help ->
@@ -868,6 +962,54 @@ receivedLetterView letter =
         [ p [ class "text-xs text-gold" ] [ text ("Round " ++ String.fromInt letter.releaseRound) ]
         , h2 [ class "mt-1 font-serif text-xl text-ink" ] [ text letter.subject ]
         , p [ class "mt-2 whitespace-pre-wrap text-sm leading-relaxed text-ink-soft" ] [ text letter.body ]
+        ]
+
+
+tabButton : String -> Msg -> Html Msg
+tabButton label msg =
+    button
+        [ class "rounded-xl border border-line bg-paper px-4 py-3 text-left text-sm font-medium text-ink"
+        , onClick msg
+        ]
+        [ text label ]
+
+
+outboxCard : Model -> Html Msg
+outboxCard model =
+    div [ class "rounded-2xl border border-line bg-sheet p-5" ]
+        [ p [ class "text-xs font-semibold uppercase tracking-widest text-gold" ] [ text "Outbox" ]
+        , h2 [ class "mt-1 font-serif text-2xl text-ink" ] [ text "Delivery status" ]
+        , p [ class "mt-2 text-sm text-ink-soft" ]
+            [ text "Prepared letters remain here until their delivery status changes." ]
+        , if List.isEmpty model.outbox then
+            p [ class "mt-3 text-sm text-ink-soft" ] [ text "No prepared letters." ]
+          else
+            div [ class "mt-5 space-y-3" ]
+                (List.map outboxItemView model.outbox)
+        ]
+
+
+outboxItemView : OutboxItem -> Html Msg
+outboxItemView item =
+    div [ class "rounded-xl border border-line bg-paper p-4" ]
+        [ div [ class "flex items-center justify-between gap-3" ]
+            [ p [ class "truncate text-sm font-medium text-ink" ] [ text item.subject ]
+            , span [ class "rounded-full border border-line px-2 py-1 text-xs text-ink-soft" ] [ text item.status ]
+            ]
+        , p [ class "mt-2 truncate font-mono text-xs text-ink-soft" ] [ text item.id ]
+        , p [ class "mt-1 text-xs text-ink-soft" ] [ text item.createdAt ]
+        , if item.error /= "" then
+            p [ class "mt-2 text-xs text-wax" ] [ text item.error ]
+          else
+            text ""
+        , if item.status == "failed" || item.status == "pending" then
+            button
+                [ class "mt-3 rounded-xl border border-line px-3 py-2 text-xs text-ink"
+                , onClick (RetryEnvelope item.id)
+                ]
+                [ text "Retry" ]
+          else
+            text ""
         ]
 
 

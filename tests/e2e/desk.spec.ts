@@ -3,6 +3,7 @@ import { expect, test } from '@playwright/test'
 test('loads the dark desk and exposes owl identity', async ({ page }) => {
   await page.goto('/')
   await expect(page.getByRole('heading', { name: 'Private letter desk' })).toBeVisible()
+  await page.getByRole('button', { name: 'Owl', exact: true }).click()
   await expect(page.getByText('Share this owl address')).toBeVisible()
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
 })
@@ -21,22 +22,26 @@ test('opens the FAQ and toggles to light mode', async ({ page }) => {
 
 test('offers the 1-second test release preset', async ({ page }) => {
   await page.goto('/')
+  await page.getByRole('button', { name: 'Compose', exact: true }).click()
   await page.getByRole('button', { name: '1 second (test)' }).click()
   await expect(page.getByRole('button', { name: '1 second (test)' })).toBeVisible()
 })
 
 test('saves and restores a draft across reload', async ({ page }) => {
   await page.goto('/')
+  await page.getByRole('button', { name: 'Compose', exact: true }).click()
   await page.getByPlaceholder('A note').fill('Test subject')
   await page.getByPlaceholder('Write in ink...').fill('Test draft body')
   await page.getByRole('button', { name: 'Save draft' }).click()
   await page.reload()
+  await page.getByRole('button', { name: 'Compose', exact: true }).click()
   await expect(page.getByPlaceholder('A note')).toHaveValue('Test subject')
   await expect(page.getByPlaceholder('Write in ink...')).toHaveValue('Test draft body')
 })
 
 test('creates an identity backup', async ({ page }) => {
   await page.goto('/')
+  await page.getByRole('button', { name: 'Owl', exact: true }).click()
   await page.getByRole('button', { name: 'Create backup' }).click()
   await expect(page.getByText('Identity backup ready')).toBeVisible()
   await expect(page.locator('textarea[rows="4"]').first()).not.toHaveValue('')
@@ -44,9 +49,44 @@ test('creates an identity backup', async ({ page }) => {
 
 test('shows a clear connection error instead of a pre-genesis drand error', async ({ page }) => {
   await page.goto('/')
+  await page.getByRole('button', { name: 'Compose', exact: true }).click()
   await page.getByRole('button', { name: 'Seal & send' }).click()
   await expect(
     page.getByText('Recipient owl address is invalid', { exact: true }),
   ).toBeVisible()
   await expect(page.getByText(/Cannot request a round before the genesis time/)).toHaveCount(0)
+})
+
+test('shows and retries a failed outbox item', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Owl', exact: true }).click()
+  const address = await page.getByText(/^owl1[A-Za-z0-9_-]+$/).first().textContent()
+  if (!address) throw new Error('Owl address was not rendered')
+  await page.getByRole('button', { name: 'Compose', exact: true }).click()
+  await page.getByPlaceholder('owl1...').fill(address)
+  await page.getByPlaceholder('A note').fill('Outbox test')
+  await page.getByPlaceholder('Write in ink...').fill('This letter is waiting for a peer.')
+  await page.getByRole('button', { name: '1 second (test)' }).click()
+  await page.getByRole('button', { name: 'Seal & send' }).click()
+  await page.getByRole('button', { name: /^Outbox/ }).click()
+  await expect(page.getByText('Outbox test')).toBeVisible()
+  await expect(page.getByText('failed', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Retry' })).toBeVisible()
+})
+
+test('opens the dedicated outbox page', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: /^Outbox/ }).click()
+  await expect(page.getByRole('heading', { name: 'Delivery status' })).toBeVisible()
+  await expect(page.getByText('Prepared letters remain here until their delivery status changes.')).toBeVisible()
+})
+
+test('splits the desk into focused tabs', async ({ page }) => {
+  await page.goto('/')
+  await expect(page.getByRole('button', { name: 'Owl', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Compose', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: /^Inbox/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: /^Outbox/ })).toBeVisible()
+  await page.getByRole('button', { name: 'Compose' }).click()
+  await expect(page.getByRole('heading', { name: 'Write' })).toBeVisible()
 })

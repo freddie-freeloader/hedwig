@@ -34,6 +34,8 @@ declare module '*.elm' {
       exportIdentity: { send: (payload: unknown) => void; subscribe: (callback: (payload: unknown) => void) => void }
       identityExported: { send: (payload: unknown) => void; subscribe: (callback: (payload: unknown) => void) => void }
       importIdentity: { send: (payload: unknown) => void; subscribe: (callback: (payload: unknown) => void) => void }
+      retryEnvelope: { send: (payload: unknown) => void; subscribe: (callback: (payload: unknown) => void) => void }
+      outboxUpdated: { send: (payload: unknown) => void; subscribe: (callback: (payload: unknown) => void) => void }
     }
   }
 

@@ -5,6 +5,8 @@ import { mainnetClient, timelockDecrypt, timelockEncrypt, Buffer } from 'tlock-j
 import { roundForReleaseMs } from './drand.ts'
 import { concatBytes, decodeBase64Url, encodeBase64Url } from './crypto/bytes.ts'
 import { openBox, sealBox } from './crypto/box.ts'
+import { reassembleTransfer, splitTransfer } from './transfer.ts'
+import type { ChunkSession } from './transfer.ts'
 
 type ElmApp = {
   ports: {
@@ -39,6 +41,8 @@ type ElmApp = {
     exportIdentity: { send: (payload: unknown) => void; subscribe?: (callback: (payload: unknown) => void) => void }
     identityExported: { send: (payload: unknown) => void }
     importIdentity: { send: (payload: unknown) => void; subscribe?: (callback: (payload: unknown) => void) => void }
+    retryEnvelope: { send: (payload: unknown) => void; subscribe?: (callback: (payload: unknown) => void) => void }
+    outboxUpdated: { send: (payload: unknown) => void }
   }
 }
 
@@ -121,6 +125,7 @@ export class HedwigBridge {
   private peer: RTCPeerConnection | null = null
   private channel: RTCDataChannel | null = null
   private readonly receivedEnvelopeIds = new Set<string>()
+  private chunkSession: ChunkSession | null = null
 
   constructor(app: ElmApp) {
     this.app = app
@@ -159,6 +164,9 @@ export class HedwigBridge {
     })
     app.ports.importIdentity.subscribe?.((payload) => {
       void this.importIdentity(String(payload))
+    })
+    app.ports.retryEnvelope.subscribe?.((payload) => {
+      this.retryEnvelope(String(payload))
     })
 
     void this.initializeIdentity({}).then(() => this.loadState())
@@ -294,6 +302,7 @@ export class HedwigBridge {
       releaseRound: number
       sentAt: string
     }>
+    const outbox = this.readArray('hedwig-outbox')
     for (const envelope of sealed) {
       try {
         const outer = JSON.parse(envelope) as OuterEnvelope
@@ -310,6 +319,7 @@ export class HedwigBridge {
       drafts: this.readArray('hedwig-drafts'),
       sealed,
       opened,
+      outbox,
     })
   }
 
@@ -322,6 +332,74 @@ export class HedwigBridge {
     )].slice(0, 20)
     localStorage.setItem('hedwig-drafts', JSON.stringify(next))
     this.log('Draft saved locally')
+  }
+
+  private saveOutboxItem(
+    id: string,
+    subject: string,
+    envelope: string,
+    status: 'pending' | 'sent' | 'failed',
+    error = '',
+  ): void {
+    const outbox = this.readArray('hedwig-outbox') as Array<{
+      id: string
+      subject: string
+      status: string
+      envelope: string
+      createdAt: string
+      error: string
+    }>
+    const item = {
+      id,
+      subject,
+      status,
+      envelope,
+      createdAt: new Date().toISOString(),
+      error,
+    }
+    localStorage.setItem(
+      'hedwig-outbox',
+      JSON.stringify([item, ...outbox.filter((entry) => entry.id !== id)].slice(0, 50)),
+    )
+    const drafts = this.readArray('hedwig-drafts') as Array<{ subject: string }>
+    localStorage.setItem(
+      'hedwig-drafts',
+      JSON.stringify(drafts.filter((draft) => draft.subject !== subject)),
+    )
+    this.loadState()
+  }
+
+  private updateOutbox(id: string, status: 'pending' | 'sent' | 'failed', error = ''): void {
+    const outbox = this.readArray('hedwig-outbox') as Array<{
+      id: string
+      subject: string
+      status: string
+      envelope: string
+      createdAt: string
+      error: string
+    }>
+    localStorage.setItem(
+      'hedwig-outbox',
+      JSON.stringify(outbox.map((item) =>
+        item.id === id ? { ...item, status, error } : item,
+      )),
+    )
+    this.loadState()
+  }
+
+  private retryEnvelope(id: string): void {
+    const outbox = this.readArray('hedwig-outbox') as Array<{ id: string; envelope: string }>
+    const item = outbox.find((entry) => entry.id === id)
+    if (!item) {
+      this.error('Prepared letter is no longer in the outbox')
+      return
+    }
+    if (!this.channel || this.channel.readyState !== 'open') {
+      this.updateOutbox(id, 'failed', 'Connect to the peer before retrying')
+      return
+    }
+    this.updateOutbox(id, 'pending')
+    this.sendTransfer(item.envelope)
   }
 
   private saveContact(contact: Record<string, string>): void {
@@ -415,31 +493,74 @@ export class HedwigBridge {
         const payload = JSON.parse(String(event.data)) as OuterEnvelope & { type?: string; envelopeId?: string }
         if (payload.type === 'delivery-confirmation') {
           this.send('envelopeSent', { envelope: String(payload.envelopeId), confirmed: true, envelopeId: payload.envelopeId })
+          this.updateOutbox(String(payload.envelopeId), 'sent')
           this.log(`Send confirmation received for ${payload.envelopeId}`)
           return
         }
-        const envelope = payload as OuterEnvelope
-        if (envelope.v !== 1 || !envelope.tlock) throw new Error('Invalid received envelope')
-        if (this.receivedEnvelopeIds.has(envelope.envelopeId)) {
-          this.log(`Duplicate envelope ignored: ${envelope.envelopeId}`)
-          channel.send(JSON.stringify({ type: 'delivery-confirmation', envelopeId: envelope.envelopeId }))
+        if (payload.type === 'hedwig-chunk') {
+          const next = reassembleTransfer(this.chunkSession, payload)
+          this.chunkSession = next.session
+          if (!next.result.ok) {
+            if (next.result.reason === 'invalid-frame') this.error('Invalid transfer chunk')
+            return
+          }
+          const envelope = JSON.parse(next.result.payload) as OuterEnvelope & { type?: string }
+          this.receiveEnvelope(channel, envelope)
           return
         }
-        this.receivedEnvelopeIds.add(envelope.envelopeId)
-        const sealed = this.readArray('hedwig-sealed') as string[]
-        sealed.unshift(JSON.stringify(envelope))
-        localStorage.setItem('hedwig-sealed', JSON.stringify(sealed.slice(0, 100)))
-        this.log(`Envelope received: ${envelope.envelopeId}`)
-        channel.send(JSON.stringify({ type: 'delivery-confirmation', envelopeId: envelope.envelopeId }))
-        this.log(`Send confirmation returned for ${envelope.envelopeId}`)
-        this.send('envelopeReceived', {
-          envelope: JSON.stringify(envelope),
-          releaseRound: envelope.releaseRound,
-        })
+        const envelope = payload as OuterEnvelope
+        this.receiveEnvelope(channel, envelope)
       } catch (caught) {
         this.error(caught instanceof Error ? caught.message : 'Invalid received envelope')
       }
     })
+  }
+
+  private receiveEnvelope(channel: RTCDataChannel, envelope: OuterEnvelope): void {
+    try {
+      if (envelope.v !== 1 || !envelope.tlock) throw new Error('Invalid received envelope')
+      if (
+        !/^owl1/.test(envelope.from)
+        || !/^owl1/.test(envelope.to)
+        || !/^[A-Za-z0-9_-]{16,32}$/.test(envelope.envelopeId)
+        || !Number.isInteger(envelope.releaseRound)
+        || envelope.releaseRound < 1
+        || envelope.tlock.length > 1_024_000
+      ) {
+        throw new Error('Invalid envelope fields')
+      }
+      if (this.receivedEnvelopeIds.has(envelope.envelopeId)) {
+        this.log(`Duplicate envelope ignored: ${envelope.envelopeId}`)
+        channel.send(JSON.stringify({ type: 'delivery-confirmation', envelopeId: envelope.envelopeId }))
+        return
+      }
+      this.receivedEnvelopeIds.add(envelope.envelopeId)
+      const sealed = this.readArray('hedwig-sealed') as string[]
+      sealed.unshift(JSON.stringify(envelope))
+      localStorage.setItem('hedwig-sealed', JSON.stringify(sealed.slice(0, 100)))
+      this.log(`Envelope received: ${envelope.envelopeId}`)
+      channel.send(JSON.stringify({ type: 'delivery-confirmation', envelopeId: envelope.envelopeId }))
+      this.log(`Send confirmation returned for ${envelope.envelopeId}`)
+      this.send('envelopeReceived', {
+        envelope: JSON.stringify(envelope),
+        releaseRound: envelope.releaseRound,
+      })
+      this.loadState()
+    } catch (caught) {
+      this.error(caught instanceof Error ? caught.message : 'Invalid received envelope')
+    }
+  }
+
+  private sendTransfer(serialized: string): void {
+    if (!this.channel || this.channel.readyState !== 'open') {
+      throw new Error('Connect to the peer before sending')
+    }
+    const envelope = JSON.parse(serialized) as OuterEnvelope
+    if (!envelope.envelopeId) throw new Error('Envelope ID is missing')
+    const frames = splitTransfer(serialized, envelope.envelopeId)
+    for (const frame of frames) {
+      this.channel.send(JSON.stringify(frame))
+    }
   }
 
   private async waitForIce(peer: RTCPeerConnection): Promise<void> {
@@ -570,10 +691,12 @@ export class HedwigBridge {
       }
       const serialized = JSON.stringify(outer)
       if (!this.channel || this.channel.readyState !== 'open') {
+        this.saveOutboxItem(id, request.subject.trim(), serialized, 'failed', 'Connect to the peer before sending')
         throw new Error('Connect to the peer before sending')
       }
+      this.saveOutboxItem(id, request.subject.trim(), serialized, 'pending')
       this.log(`Sending envelope ${id}: ${request.subject.trim()} (release round ${releaseRound})`)
-      this.channel.send(serialized)
+      this.sendTransfer(serialized)
       this.send('envelopeSent', { envelope: serialized, confirmed: false, envelopeId: id })
       this.log(`Envelope ${id} handed to the WebRTC data channel`)
     } catch (caught) {
