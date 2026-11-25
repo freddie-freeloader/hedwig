@@ -28,6 +28,12 @@ declare module '*.elm' {
       letterDecrypted: { send: (payload: unknown) => void; subscribe: (callback: (payload: unknown) => void) => void }
       bridgeError: { send: (payload: unknown) => void; subscribe: (callback: (payload: unknown) => void) => void }
       debugLog: { send: (payload: unknown) => void; subscribe: (callback: (payload: unknown) => void) => void }
+      saveDraft: { send: (payload: unknown) => void; subscribe: (callback: (payload: unknown) => void) => void }
+      saveContact: { send: (payload: unknown) => void; subscribe: (callback: (payload: unknown) => void) => void }
+      stateLoaded: { send: (payload: unknown) => void; subscribe: (callback: (payload: unknown) => void) => void }
+      exportIdentity: { send: (payload: unknown) => void; subscribe: (callback: (payload: unknown) => void) => void }
+      identityExported: { send: (payload: unknown) => void; subscribe: (callback: (payload: unknown) => void) => void }
+      importIdentity: { send: (payload: unknown) => void; subscribe: (callback: (payload: unknown) => void) => void }
     }
   }
 

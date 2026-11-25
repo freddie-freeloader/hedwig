@@ -25,6 +25,23 @@ test('offers the 1-second test release preset', async ({ page }) => {
   await expect(page.getByRole('button', { name: '1 second (test)' })).toBeVisible()
 })
 
+test('saves and restores a draft across reload', async ({ page }) => {
+  await page.goto('/')
+  await page.getByPlaceholder('A note').fill('Test subject')
+  await page.getByPlaceholder('Write in ink...').fill('Test draft body')
+  await page.getByRole('button', { name: 'Save draft' }).click()
+  await page.reload()
+  await expect(page.getByPlaceholder('A note')).toHaveValue('Test subject')
+  await expect(page.getByPlaceholder('Write in ink...')).toHaveValue('Test draft body')
+})
+
+test('creates an identity backup', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Create backup' }).click()
+  await expect(page.getByText('Identity backup ready')).toBeVisible()
+  await expect(page.locator('textarea[rows="4"]').first()).not.toHaveValue('')
+})
+
 test('shows a clear connection error instead of a pre-genesis drand error', async ({ page }) => {
   await page.goto('/')
   await page.getByRole('button', { name: 'Seal & send' }).click()
