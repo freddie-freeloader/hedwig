@@ -3,6 +3,25 @@
 @theme {
   --font-serif: "Fraunces", "Iowan Old Style", Palatino, serif;
   --font-sans: "Outfit", "Avenir Next", sans-serif;
+}
+
+:root,
+:root[data-theme="dark"] {
+  --color-paper: #171713;
+  --color-paper-deep: #24231e;
+  --color-sheet: #201f1a;
+  --color-ink: #eee8dc;
+  --color-ink-soft: #bbb3a4;
+  --color-line: #49463d;
+  --color-wax: #d27a70;
+  --color-wax-deep: #a95048;
+  --color-moss: #93bda8;
+  --color-moss-soft: #b0ccbE;
+  --color-gold: #c8ad72;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
   --color-paper: #f3eee4;
   --color-paper-deep: #e6dccb;
   --color-sheet: #fbf7f0;

@@ -1,20 +1,20 @@
 # Hedwig
 
-Hedwig is a peer-to-peer letter desk. You can write whenever you like. You can open the inbox only once each local day. Until that opening, letters stay sealed. Anything that arrives afterward waits for tomorrow.
+Hedwig is a static, peer-to-peer letter desk built with Elm and a small
+TypeScript browser bridge. It uses manual WebRTC signaling, Ed25519/X25519
+keys, and drand TLock to send letters that cannot be opened before a selected
+round.
 
-Two desks in the same browser are enough to try it: give each tab its own `?desk=` name, exchange owl addresses, and send a letter.
+Both peers need to be online at the same time. The MVP has no relay, mailbox,
+signaling server, account system, or offline delivery queue.
 
-## Run
+## Try locally
 
-Requires Node.js 22 or newer.
+Requirements:
 
-```bash
-npm install
-npm run dev
-```
-
-With Nix, enter the development shell to provide Node.js 22 and pnpm, then
-install dependencies and run the app:
+- Node.js 22
+- pnpm
+- Nix optional, through the included development flake
 
 ```bash
 nix develop
@@ -22,96 +22,160 @@ pnpm install
 pnpm dev
 ```
 
-- Desk: [http://127.0.0.1:4731](http://127.0.0.1:4731)
-- Ciphertext relay: `http://127.0.0.1:4747` (the desk proxies `/v1` and `/ws` to it)
+Open [http://127.0.0.1:4731](http://127.0.0.1:4731).
 
-`npm test`, `npm run lint`, and `npm run build` cover the crypto, the daily rule, and the relay.
+To verify a production build:
 
-The relay keeps its mailbox in `data/relay.json`. Delete that file to forget every owl it has seen.
+```bash
+pnpm build
+```
 
-## Two owls
+## Send a letter
 
-Open two tabs:
+1. Open Hedwig in two browser profiles or tabs.
+2. Copy the owl address from each desk.
+3. One owl creates an invitation and sends its code to the other owl.
+4. The other owl pastes the invitation and creates an answer.
+5. Send the answer back to the owl that created the invitation.
+6. Paste the answer into the first owl and choose **Connect**.
+7. Enter the recipient owl address, subject, letter, and release duration.
+8. Choose **Seal & send**.
 
-- [http://127.0.0.1:4731/?desk=alba](http://127.0.0.1:4731/?desk=alba)
-- [http://127.0.0.1:4731/?desk=bram](http://127.0.0.1:4731/?desk=bram)
-
-Each `desk` value is a separate IndexedDB database, so one browser can hold two owls. A normal visit, without `?desk=`, uses one owl per browser profile. Two profiles do not need the query.
-
-1. Name each owl.
-2. Copy an address, or show its mark, and add it on the other desk.
-3. Write a letter. The other desk shows a sealed count and the sender, not the words.
-4. Break the seal. The letter can be read, and the perch will not open again until the next local midnight.
-5. Send another letter. It stays in “since you opened” until tomorrow.
-
-The calendar day is the timezone chosen when the owl was created. The relay’s clock decides which day that is.
+Both tabs must remain connected until the transfer is complete. A
+`1 second (test)` release preset is available for development.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  alba[Alba's desk]
-  bram[Bram's desk]
-  relay[Relay: directory, mailbox, seal keeper, signaling]
-  alba -->|WebRTC ciphertext when both are online| bram
-  alba -->|ciphertext only if Bram is offline| relay
-  bram -->|one wrapped inbox key per day| relay
-  relay -->|SDP and ICE, never plaintext| alba
-  relay -->|SDP and ICE, never plaintext| bram
+  elm[Elm desk and protocol state]
+  bridge[TypeScript browser bridge]
+  rtc[WebRTC data channel]
+  drand[Drand TLock]
+  peer[Second owl]
+
+  elm <-->|typed ports| bridge
+  bridge --> rtc
+  rtc --> peer
+  bridge --> drand
 ```
 
-There is no account server and no message store that can read mail.
+### Elm
 
-| Piece | What it holds | What it cannot do |
-| --- | --- | --- |
-| Desk | Ed25519 identity key, 32-byte wrap key, opened letters, sealed ciphertext that arrived directly | It does not keep the current inbox private key |
-| Relay | Public directory, sealed letters for offline owls, wrapped inbox private keys, WebRTC signaling | It cannot unwrap keys or read subjects and bodies |
-| Other owl | Your public address and current inbox public key | They cannot open your letters |
+Elm owns the desk UI and application state:
 
-When the recipient is online, the letter is offered over a WebRTC data channel. The relay only forwards SDP and ICE, plus a STUN lookup (`stun.l.google.com`) so two machines on different networks can find each other. A STUN server sees IP addresses, not letters. If the direct channel does not acknowledge within a couple of seconds, the same ciphertext is stored in the recipient’s mailbox until they open the post.
+- owl name and address display;
+- manual invitation and answer state;
+- letter composer;
+- release preset selection;
+- sealed inbox state;
+- debug activity;
+- dark/light theme preference;
+- Help & FAQ navigation.
 
-Contacts are the owl address: `owl1` plus the Ed25519 public key and a 4-byte checksum. The mark is a QR code of that string.
+Elm source is in `src/Main.elm`.
 
-## Cryptography
+### TypeScript bridge
 
-- Identity: Ed25519. The address is the public key. Requests and letters are signed with it.
-- Inbox: a fresh X25519 key for each sealed period. Letters use an ephemeral X25519 key, HKDF-SHA256, and XChaCha20-Poly1305. The sender, recipient, letter id, and inbox key are bound as associated data.
-- Wrap: the inbox private key is encrypted with XChaCha20-Poly1305 under a random 32-byte key that never leaves the desk. The relay stores only that blob.
-- Libraries: [`@noble/curves`](https://github.com/paulmillr/noble-curves), [`@noble/ciphers`](https://github.com/paulmillr/noble-ciphers), and [`@noble/hashes`](https://github.com/paulmillr/noble-hashes).
+The browser bridge in `src/bridge.ts` owns APIs Elm cannot access directly:
 
-Opening is one request. The desk generates the next inbox key, wraps it, and sends it up. The relay, in the same step, returns the previous wrapped key and every letter addressed to it, then publishes the new key. Until the desk acknowledges, a retry returns that same batch and does not rotate again. After the acknowledgement, the relay drops the released key. Letters that arrive later are encrypted to the new public key.
+- Ed25519 identity and X25519 exchange keys;
+- browser local storage;
+- X25519 letter encryption;
+- drand/TLock encryption and decryption;
+- STUN-assisted WebRTC;
+- copy/paste signaling;
+- application-level delivery confirmations.
 
-The desk also refuses a second opening on its own, using the local date it stored. Both checks have to agree.
+Cryptography uses the packages already in `package.json`: Noble Ed25519,
+X25519, Ciphers, Hashes, drand-client, and tlock-js.
 
-## The once-a-day rule
+### TLock rounds
 
-The day is the owl’s locked IANA timezone, measured by the relay clock. The claimed date must be that exact local date. A second opening on the same date is refused. Claiming another timezone, or tomorrow while it is still today, is refused.
+The release duration is converted to milliseconds, then mapped to a drand
+round using the pinned Quicknet chain. This boundary is deliberately tested:
+the drand library rejects seconds as timestamps and pre-genesis values.
 
-This is stronger than a flag in `localStorage`, because the private key needed to read sealed mail is not on the desk until the relay releases it. It is not a time-lock puzzle. A verifiable delay or a drand beacon would unlock at a fixed public time for anyone who has the ciphertext. That does not match “open once, at the moment you choose, and keep later arrivals sealed.” Those tools could be added later as a “not before dawn” floor. They would not, by themselves, enforce a single opening.
+The letter is protected by two layers:
 
-### What a determined person can bypass
+- X25519: only the named recipient owl can decrypt the letter.
+- TLock: the ciphertext cannot be opened before the selected drand round.
+- Ed25519: the sender signs the envelope metadata.
 
-- **A modified client.** The desk generates the inbox key. A patched app can keep the private key, skip the wrap, and decrypt every arrival immediately. No protocol the honest client follows can stop a client the person rewrites. This is the real limit of v1.
-- **The opening response.** It contains the wrapped key and the ciphertext for that batch. Saving it means that batch can be decrypted again later. It does not reveal letters sealed to the next key.
-- **Skipping the acknowledgement.** Until the desk acks, the relay will hand the same batch back. The honest desk acks as soon as the letters are saved. Someone who never acks can fetch that one batch again. They still do not get the next key.
-- **Their own relay.** Editing `data/relay.json`, or running a relay that ignores the date, releases the wrapped key more often. The wrap key is still only on the desk, so a curious relay operator cannot read the mail. A person who controls both the relay and the desk already can.
-- **DevTools on the honest app.** Changing `lastOpenedLocalDate` in IndexedDB does not make the relay release the key again. Clearing the site deletes the identity and the wrap key; it does not unlock the relay’s copy, and the owl is gone.
-- **Re-reading opened letters.** After a successful opening the plaintext stays on the desk. “Once” means one unsealing of the sealed batch, not that the letters you have already read disappear.
-- **Clock skew around midnight.** The relay’s clock wins. A desk whose clock is on the other side of local midnight from the relay is told the date is implausible. Moving the clock far ahead does not open a future day, because the relay computes the date itself.
-- **Metadata.** The relay sees owl addresses, the current inbox public key, ciphertext sizes, and timing. Sender and recipient addresses are outside the seal so the desk can show who is waiting. Subjects and bodies are not.
+## Data and privacy
 
-Identity keys live in IndexedDB. Anyone who can run script in this origin, or who can copy the browser profile, can impersonate the owl and unwrap future inbox keys. This is not a hardware key store.
+- Identity keys are stored in browser local storage.
+- Clearing browser storage removes the local identity.
+- Two browser profiles do not share an identity.
+- Plaintext and private keys do not pass through a server.
+- STUN may observe network addresses used for connection discovery.
+- TLock requires public drand infrastructure to publish future randomness.
+- This MVP has not received an independent security audit.
 
-## Layout
+An unsent letter is not guaranteed to survive closing the page. There is no
+mailbox or retry server.
 
+## Debugging
+
+The desk includes a **Recent activity** panel showing:
+
+- identity creation or restore;
+- ICE gathering;
+- peer connection state;
+- data-channel open/close;
+- envelope send and receive events;
+- TLock decryption;
+- application delivery confirmations;
+- errors.
+
+The same events are written to the browser console with `[Hedwig]`.
+
+## GitHub Pages
+
+Pushing `main` deploys the static build to GitHub Pages through
+`.github/workflows/pages.yml`.
+
+Before pushing, test the repository-subpath build:
+
+```bash
+pnpm build:pages
+pnpm exec vite preview --host 127.0.0.1 --port 4173 --strictPort
 ```
-src/crypto     addresses, signatures, sealed boxes, key wrap, letters
-src/inbox      mockable clock and the once-a-day decision
-src/relay      signed requests and the mailbox state machine
-src/client     IndexedDB, WebRTC, and the desk session
-src/ui         the paper desk
-server         HTTP and WebSocket relay
-tests          crypto, daily rule, mailbox, and the HTTP relay
+
+For this repository, the preview is at
+[http://127.0.0.1:4173/hedwig/](http://127.0.0.1:4173/hedwig/).
+
+GitHub Pages should be configured to use **GitHub Actions** as the source.
+
+## Tests
+
+Run the unit suite:
+
+```bash
+pnpm test
 ```
 
-The daily decision and the mailbox take a `Clock`. Tests use `ManualClock` instead of waiting for midnight.
+Run the browser suite:
+
+```bash
+pnpm exec playwright install chromium
+pnpm test:e2e
+```
+
+Coverage currently includes:
+
+- drand millisecond conversion and pre-genesis rejection;
+- the 1-second release preset;
+- dark-mode default;
+- theme switching;
+- Help & FAQ rendering;
+- clear errors for invalid sends.
+
+## Limitations
+
+- Direct WebRTC may fail behind strict NAT or firewall configurations.
+- TURN is intentionally not used.
+- Manual signaling requires the peers to exchange invitation and answer text.
+- TLock guarantees timing, not metadata privacy or offline availability.
+- Browser storage is not hardware-backed.
+- The MVP does not implement recovery codes or cross-device identity backup.

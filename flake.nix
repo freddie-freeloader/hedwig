@@ -18,6 +18,7 @@
             packages = [
               pkgs.nodejs_22
               pkgs.pnpm
+              pkgs.elmPackages.elm
             ];
 
             shellHook = ''
