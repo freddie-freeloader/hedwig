@@ -13,6 +13,15 @@ npm install
 npm run dev
 ```
 
+With Nix, enter the development shell to provide Node.js 22 and pnpm, then
+install dependencies and run the app:
+
+```bash
+nix develop
+pnpm install
+pnpm dev
+```
+
 - Desk: [http://127.0.0.1:4731](http://127.0.0.1:4731)
 - Ciphertext relay: `http://127.0.0.1:4747` (the desk proxies `/v1` and `/ws` to it)
 
