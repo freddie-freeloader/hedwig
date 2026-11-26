@@ -171,6 +171,21 @@ Coverage currently includes:
 - Help & FAQ rendering;
 - clear errors for invalid sends.
 
+## Security and operational boundaries
+
+- Identity backup data contains private Ed25519 and X25519 keys. Anyone who
+  obtains the file can impersonate the owl and decrypt letters addressed to it.
+- Browser local storage does not provide hardware-backed secrecy. Clearing,
+  copying, or malicious script access can affect identity and saved mail.
+- WebRTC peers and STUN can observe connection metadata and IP addresses.
+  Letter bodies remain TLock and recipient-key encrypted.
+- Drand TLock provides time-based secrecy, not sender authenticity or a
+  hardware trust boundary. The app separately verifies Ed25519 and recipient
+  envelope fields.
+- Replay protection is local to the recipient browser. A modified client or
+  copied browser state can bypass application convenience protections.
+- There is no offline mailbox, replication guarantee, or retry server.
+
 ## Limitations
 
 - Direct WebRTC may fail behind strict NAT or firewall configurations.

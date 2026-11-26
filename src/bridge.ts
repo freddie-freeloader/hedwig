@@ -9,6 +9,7 @@ import { openBox, sealBox } from './crypto/box.ts'
 import { reassembleTransfer, splitTransfer } from './transfer.ts'
 import type { ChunkSession } from './transfer.ts'
 import { createSignalingEnvelope, parseSignalingEnvelope } from './signaling.ts'
+import { envelopeReplayKey, parseOuterEnvelope } from './envelope.ts'
 
 type ElmApp = {
   ports: {
@@ -437,6 +438,7 @@ export class HedwigBridge {
       id,
       subject,
       recipient,
+      recipientName: this.contactName(recipient),
       status,
       envelope,
       createdAt: new Date().toISOString(),
@@ -475,6 +477,7 @@ export class HedwigBridge {
     const item = {
       id,
       to: recipient,
+      recipientName: this.contactName(recipient),
       subject,
       body,
       releaseRound,
@@ -541,6 +544,11 @@ export class HedwigBridge {
     this.updateSentStatus(id, 'pending')
     this.loadState()
     this.sendTransfer(item.envelope)
+  }
+
+  private contactName(address: string): string {
+    const contacts = this.readArray('hedwig-contacts') as Array<{ name: string; address: string }>
+    return contacts.find((contact) => contact.address === address)?.name ?? ''
   }
 
   private saveContact(contact: Record<string, string>): void {
@@ -700,7 +708,9 @@ export class HedwigBridge {
 
   private receiveEnvelope(channel: RTCDataChannel, envelope: OuterEnvelope): void {
     try {
-      if (envelope.v !== 1 || !envelope.tlock) throw new Error('Invalid received envelope')
+      const parsed = parseOuterEnvelope(envelope)
+      if (!parsed) throw new Error('Invalid received envelope')
+      envelope = parsed
       if (
         !/^owl1/.test(envelope.from)
         || !/^owl1/.test(envelope.to)
@@ -711,12 +721,13 @@ export class HedwigBridge {
       ) {
         throw new Error('Invalid envelope fields')
       }
-      if (this.receivedEnvelopeIds.has(envelope.envelopeId)) {
+      const replayKey = envelopeReplayKey(envelope)
+      if (this.receivedEnvelopeIds.has(replayKey)) {
         this.log(`Duplicate envelope ignored: ${envelope.envelopeId}`)
         channel.send(JSON.stringify({ type: 'delivery-confirmation', envelopeId: envelope.envelopeId }))
         return
       }
-      this.receivedEnvelopeIds.add(envelope.envelopeId)
+      this.receivedEnvelopeIds.add(replayKey)
       const sealed = this.readArray('hedwig-sealed') as string[]
       const receivedEnvelope = { ...envelope, receivedAt: new Date().toISOString() }
       sealed.unshift(JSON.stringify(receivedEnvelope))

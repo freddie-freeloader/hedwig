@@ -79,6 +79,7 @@ type alias OutboxItem =
     { id : String
     , subject : String
     , recipient : String
+    , recipientName : String
     , status : String
     , envelope : String
     , createdAt : String
@@ -642,10 +643,11 @@ update msg model =
                         (D.field "releaseHours" D.string)
                         (D.field "releaseSeconds" D.string)
                 outboxDecoder =
-                    D.map7 OutboxItem
+                    D.map8 OutboxItem
                         (D.field "id" D.string)
                         (D.field "subject" D.string)
                         (D.oneOf [ D.field "recipient" D.string, D.succeed "" ])
+                        (D.oneOf [ D.field "recipientName" D.string, D.succeed "" ])
                         (D.field "status" D.string)
                         (D.field "envelope" D.string)
                         (D.field "createdAt" D.string)
@@ -1255,7 +1257,13 @@ outboxItemView item =
             , span [ class "rounded-full border border-line px-2 py-1 text-xs text-ink-soft" ] [ text item.status ]
             ]
         , p [ class "mt-2 truncate font-mono text-xs text-ink-soft" ] [ text item.id ]
-        , p [ class "mt-1 break-all font-mono text-xs text-ink-soft" ] [ text ("To " ++ item.recipient) ]
+        , p [ class "mt-1 break-all font-mono text-xs text-ink-soft" ]
+            [ text
+                ("To "
+                    ++ (if item.recipientName == "" then item.recipient else item.recipientName)
+                    ++ (if item.recipientName == "" then "" else " · " ++ item.recipient)
+                )
+            ]
         , p [ class "mt-1 text-xs text-ink-soft" ] [ text item.createdAt ]
         , if item.error /= "" then
             p [ class "mt-2 text-xs text-wax" ] [ text item.error ]
@@ -1328,7 +1336,8 @@ sentLetterView letter =
             [ h2 [ class "font-serif text-xl text-ink" ] [ text letter.subject ]
             , span [ class "shrink-0 rounded-full border border-line px-2 py-1 text-xs text-ink-soft" ] [ text letter.status ]
             ]
-        , p [ class "mt-2 break-all font-mono text-xs text-ink-soft" ] [ text ("To " ++ letter.to) ]
+        , p [ class "mt-2 break-all font-mono text-xs text-ink-soft" ]
+            [ text ("To " ++ letter.to) ]
         , p [ class "mt-1 text-xs text-ink-soft" ] [ text ((if letter.sentAtLocal == "" then letter.sentAt else letter.sentAtLocal) ++ " · release round " ++ String.fromInt letter.releaseRound) ]
         , p [ class "mt-3 whitespace-pre-wrap text-sm leading-relaxed text-ink-soft" ] [ text letter.body ]
         ]
