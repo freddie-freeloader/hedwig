@@ -90,3 +90,61 @@ test('splits the desk into focused tabs', async ({ page }) => {
   await page.getByRole('button', { name: 'Compose' }).click()
   await expect(page.getByRole('heading', { name: 'Write' })).toBeVisible()
 })
+
+test('keeps a full copy in Sent after preparing a letter', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Owl', exact: true }).click()
+  const address = await page.getByText(/^owl1[A-Za-z0-9_-]+$/).first().textContent()
+  if (!address) throw new Error('Owl address was not rendered')
+  await page.getByRole('button', { name: 'Compose', exact: true }).click()
+  await page.getByPlaceholder('owl1...').fill(address)
+  await page.getByPlaceholder('A note').fill('A preserved copy')
+  await page.getByPlaceholder('Write in ink...').fill('This full text should remain in Sent.')
+  await page.getByRole('button', { name: '1 second (test)' }).click()
+  await page.getByRole('button', { name: 'Seal & send' }).click()
+  await page.getByRole('button', { name: /^Sent/ }).click()
+  await expect(page.getByRole('heading', { name: 'A preserved copy' })).toBeVisible()
+  await expect(page.getByText('This full text should remain in Sent.')).toBeVisible()
+  await page.reload()
+  await page.getByRole('button', { name: /^Sent/ }).click()
+  await expect(page.getByText('This full text should remain in Sent.')).toBeVisible()
+})
+
+test('connects two browser contexts by manual WebRTC signaling', async ({ browser }) => {
+  const sender = await browser.newContext()
+  const recipient = await browser.newContext()
+  const senderPage = await sender.newPage()
+  const recipientPage = await recipient.newPage()
+
+  await senderPage.goto('/')
+  await recipientPage.goto('/')
+  await senderPage.getByRole('button', { name: 'Owl', exact: true }).click()
+  await recipientPage.getByRole('button', { name: 'Owl', exact: true }).click()
+
+  const recipientAddress = await recipientPage.locator('p.font-mono').first().textContent()
+  if (!recipientAddress || !recipientAddress.startsWith('owl1')) {
+    throw new Error('Recipient address was not available')
+  }
+
+  await senderPage.getByRole('button', { name: 'Create invitation' }).click()
+  await expect(senderPage.getByText(/invitation|waiting/i).first()).toBeVisible()
+  const invitationInput = senderPage.getByPlaceholder('Paste invitation here')
+  await expect.poll(async () => (await invitationInput.inputValue()).length).toBeGreaterThan(100)
+  const invitation = await invitationInput.inputValue()
+  if (!invitation) throw new Error('Invitation was not created')
+
+  await recipientPage.getByPlaceholder('Paste invitation here').fill(invitation)
+  await recipientPage.getByRole('button', { name: 'Create answer' }).click()
+  await expect(recipientPage.getByText(/answer|waiting/i).first()).toBeVisible()
+  const answerInput = recipientPage.getByPlaceholder('Paste answer here')
+  await expect.poll(async () => (await answerInput.inputValue()).length).toBeGreaterThan(100)
+  const answer = await answerInput.inputValue()
+  if (!answer) throw new Error('Answer was not created')
+
+  await senderPage.getByPlaceholder('Paste answer here').fill(answer)
+  await senderPage.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(senderPage.getByText(/connected|connecting/i).first()).toBeVisible()
+
+  await recipient.close()
+  await sender.close()
+})

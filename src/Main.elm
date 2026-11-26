@@ -32,6 +32,7 @@ port stateLoaded : (E.Value -> msg) -> Sub msg
 port exportIdentity : () -> Cmd msg
 port identityExported : (E.Value -> msg) -> Sub msg
 port importIdentity : String -> Cmd msg
+port downloadIdentity : String -> Cmd msg
 port retryEnvelope : String -> Cmd msg
 port outboxUpdated : (E.Value -> msg) -> Sub msg
 
@@ -49,6 +50,17 @@ type alias Letter =
     , body : String
     , releaseRound : Int
     , sentAt : String
+    }
+
+
+type alias SentLetter =
+    { id : String
+    , to : String
+    , subject : String
+    , body : String
+    , releaseRound : Int
+    , sentAt : String
+    , status : String
     }
 
 
@@ -87,6 +99,7 @@ type alias Model =
     , identityBackup : String
     , importBackup : String
     , outbox : List OutboxItem
+    , sent : List SentLetter
     }
 
 
@@ -111,6 +124,7 @@ type Page
     | Compose
     | Inbox
     | Outbox
+    | Sent
     | Help
 
 
@@ -121,6 +135,7 @@ type Msg
     | ShowCompose
     | ShowInbox
     | ShowOutbox
+    | ShowSent
     | ShowHelp
     | CopyAddress
     | CopyInvitation
@@ -156,6 +171,7 @@ type Msg
     | IdentityExportedResult D.Value
     | ImportIdentityChanged String
     | ImportIdentity
+    | DownloadIdentity
     | SaveDraft
     | AddRecipientContact
     | SelectRecipient String
@@ -177,6 +193,7 @@ init flags =
       , page =
             if String.contains "#help" flags.location then Help
             else if String.contains "#outbox" flags.location then Outbox
+            else if String.contains "#sent" flags.location then Sent
             else if String.contains "#compose" flags.location then Compose
             else if String.contains "#inbox" flags.location then Inbox
             else if String.contains "#owl" flags.location then Owl
@@ -203,6 +220,7 @@ init flags =
       , identityBackup = ""
       , importBackup = ""
       , outbox = []
+      , sent = []
       }
     , initializeIdentity (E.object [ ( "name", E.string "" ) ])
     )
@@ -250,6 +268,9 @@ update msg model =
 
         ShowOutbox ->
             ( { model | page = Outbox }, Cmd.none )
+
+        ShowSent ->
+            ( { model | page = Sent }, Cmd.none )
 
         ShowHelp ->
             ( { model | page = Help }, Cmd.none )
@@ -495,7 +516,13 @@ update msg model =
             ( { model | importBackup = value }, Cmd.none )
 
         ImportIdentity ->
-            ( model, importIdentity model.importBackup )
+            if model.importBackup == "" then
+                ( { model | notice = "Paste an identity backup first" }, Cmd.none )
+            else
+                ( model, importIdentity model.importBackup )
+
+        DownloadIdentity ->
+            ( model, downloadIdentity model.identityBackup )
 
         StateLoadedResult value ->
             let
@@ -518,14 +545,24 @@ update msg model =
                         (D.field "envelope" D.string)
                         (D.field "createdAt" D.string)
                         (D.field "error" D.string)
+                sentDecoder =
+                    D.map7 SentLetter
+                        (D.field "id" D.string)
+                        (D.field "to" D.string)
+                        (D.field "subject" D.string)
+                        (D.field "body" D.string)
+                        (D.field "releaseRound" D.int)
+                        (D.field "sentAt" D.string)
+                        (D.field "status" D.string)
                 decoder =
-                    D.map5
-                        (\contacts drafts sealed inbox outbox ->
+                    D.map6
+                        (\contacts drafts sealed inbox outbox sent ->
                             { contacts = contacts
                             , drafts = drafts
                             , sealed = sealed
                             , inbox = inbox
                             , outbox = outbox
+                            , sent = sent
                             })
                         (D.field "contacts" (D.list contactDecoder))
                         (D.field "drafts" (D.list draftDecoder))
@@ -543,6 +580,7 @@ update msg model =
                             )
                         )
                         (D.field "outbox" (D.list outboxDecoder))
+                        (D.field "sent" (D.list sentDecoder))
             in
             case D.decodeValue decoder value of
                 Ok state ->
@@ -569,6 +607,7 @@ update msg model =
                         , sealedEnvelopes = state.sealed
                         , inbox = state.inbox
                         , outbox = state.outbox
+                        , sent = state.sent
                         , draftEnvelope =
                             case List.head state.sealed of
                                 Just envelope ->
@@ -622,6 +661,11 @@ view model =
                     [ text ("Outbox (" ++ String.fromInt (List.length model.outbox) ++ ")") ]
                 , button
                     [ class "rounded-full border border-line px-3 py-2 text-sm text-ink-soft"
+                    , onClick ShowSent
+                    ]
+                    [ text ("Sent (" ++ String.fromInt (List.length model.sent) ++ ")") ]
+                , button
+                    [ class "rounded-full border border-line px-3 py-2 text-sm text-ink-soft"
                     , onClick ShowHelp
                     ]
                     [ text "Help & FAQ" ]
@@ -654,6 +698,7 @@ view model =
                                 , tabButton "Write a letter" ShowCompose
                                 , tabButton ("Open inbox (" ++ String.fromInt (List.length model.inbox + (if model.draftEnvelope == "" then 0 else 1)) ++ ")") ShowInbox
                                 , tabButton ("Review outbox (" ++ String.fromInt (List.length model.outbox) ++ ")") ShowOutbox
+                                , tabButton ("Review sent (" ++ String.fromInt (List.length model.sent) ++ ")") ShowSent
                                 ]
                             ]
                         ]
@@ -672,6 +717,8 @@ view model =
                     [ outboxCard model
                     , debugLogCard model
                     ]
+            Sent ->
+                div [ class "mx-auto max-w-3xl" ] [ sentCard model ]
             Help ->
                 helpPage
         ]
@@ -722,6 +769,11 @@ identityCard model =
                                 , onClick CopyBackup
                                 ]
                                 [ text "Copy backup" ]
+                            , button
+                                [ class "rounded-xl border border-line px-3 py-2 text-sm text-ink"
+                                , onClick DownloadIdentity
+                                ]
+                                [ text "Download" ]
                             ]
                         , textarea
                             [ class "mt-3 min-h-20 w-full rounded-xl border border-line bg-sheet px-3 py-2 font-mono text-xs text-ink"
@@ -1010,6 +1062,33 @@ outboxItemView item =
                 [ text "Retry" ]
           else
             text ""
+        ]
+
+
+sentCard : Model -> Html Msg
+sentCard model =
+    div [ class "rounded-2xl border border-line bg-sheet p-5" ]
+        [ p [ class "text-xs font-semibold uppercase tracking-widest text-gold" ] [ text "Sent" ]
+        , h1 [ class "mt-1 font-serif text-3xl text-ink" ] [ text "Sent letters" ]
+        , p [ class "mt-2 text-sm text-ink-soft" ] [ text "Full copies stay in this browser, separately from delivery status." ]
+        , if List.isEmpty model.sent then
+            p [ class "mt-5 text-sm text-ink-soft" ] [ text "No sent letters yet." ]
+          else
+            div [ class "mt-5 space-y-3" ]
+                (List.map sentLetterView model.sent)
+        ]
+
+
+sentLetterView : SentLetter -> Html Msg
+sentLetterView letter =
+    div [ class "rounded-xl border border-line bg-paper p-4" ]
+        [ div [ class "flex items-start justify-between gap-3" ]
+            [ h2 [ class "font-serif text-xl text-ink" ] [ text letter.subject ]
+            , span [ class "shrink-0 rounded-full border border-line px-2 py-1 text-xs text-ink-soft" ] [ text letter.status ]
+            ]
+        , p [ class "mt-2 break-all font-mono text-xs text-ink-soft" ] [ text ("To " ++ letter.to) ]
+        , p [ class "mt-1 text-xs text-ink-soft" ] [ text (letter.sentAt ++ " · release round " ++ String.fromInt letter.releaseRound) ]
+        , p [ class "mt-3 whitespace-pre-wrap text-sm leading-relaxed text-ink-soft" ] [ text letter.body ]
         ]
 
 

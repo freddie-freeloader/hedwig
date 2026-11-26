@@ -70,6 +70,36 @@ textarea {
   font: inherit;
 }
 
+button {
+  min-height: 44px;
+  touch-action: manipulation;
+}
+
+header nav,
+.tab-bar {
+  min-width: 0;
+}
+
+@media (max-width: 720px) {
+  header {
+    align-items: flex-start;
+  }
+
+  header > div:last-child {
+    max-width: 100%;
+    flex-wrap: wrap;
+  }
+
+  header button {
+    min-height: 40px;
+  }
+
+  textarea,
+  input {
+    font-size: 16px;
+  }
+}
+
 :focus-visible {
   outline: 2px solid var(--color-moss);
   outline-offset: 3px;

@@ -33,4 +33,15 @@ app.ports.copyText.subscribe((text: string) => {
   void navigator.clipboard.writeText(text).catch(() => undefined)
 })
 
+app.ports.downloadIdentity.subscribe((backup: string) => {
+  if (!backup) return
+  const blob = new Blob([backup], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = 'hedwig-identity.json'
+  link.click()
+  URL.revokeObjectURL(url)
+})
+
 new HedwigBridge(app)
