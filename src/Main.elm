@@ -33,6 +33,10 @@ port exportIdentity : () -> Cmd msg
 port identityExported : (E.Value -> msg) -> Sub msg
 port importIdentity : String -> Cmd msg
 port downloadIdentity : String -> Cmd msg
+port importIdentityFile : () -> Cmd msg
+port identityFileLoaded : (E.Value -> msg) -> Sub msg
+port archiveOutbox : () -> Cmd msg
+port archiveSent : () -> Cmd msg
 port retryEnvelope : String -> Cmd msg
 port outboxUpdated : (E.Value -> msg) -> Sub msg
 
@@ -67,6 +71,7 @@ type alias SentLetter =
 type alias OutboxItem =
     { id : String
     , subject : String
+    , recipient : String
     , status : String
     , envelope : String
     , createdAt : String
@@ -172,6 +177,10 @@ type Msg
     | ImportIdentityChanged String
     | ImportIdentity
     | DownloadIdentity
+    | ImportIdentityFile
+    | IdentityFileLoadedResult D.Value
+    | ArchiveOutbox
+    | ArchiveSent
     | SaveDraft
     | AddRecipientContact
     | SelectRecipient String
@@ -241,6 +250,7 @@ subscriptions _ =
         , stateLoaded StateLoadedResult
         , identityExported IdentityExportedResult
         , outboxUpdated StateLoadedResult
+        , identityFileLoaded IdentityFileLoadedResult
         ]
 
 
@@ -524,6 +534,24 @@ update msg model =
         DownloadIdentity ->
             ( model, downloadIdentity model.identityBackup )
 
+        ImportIdentityFile ->
+            ( model, importIdentityFile () )
+
+        IdentityFileLoadedResult value ->
+            case D.decodeValue (D.field "backup" D.string) value of
+                Ok backup ->
+                    ( { model | importBackup = backup, notice = "Identity file loaded; restore it only if it belongs to this owl" }
+                    , Cmd.none
+                    )
+                Err _ ->
+                    ( { model | notice = "Identity file could not be read" }, Cmd.none )
+
+        ArchiveOutbox ->
+            ( model, archiveOutbox () )
+
+        ArchiveSent ->
+            ( model, archiveSent () )
+
         StateLoadedResult value ->
             let
                 contactDecoder =
@@ -538,9 +566,10 @@ update msg model =
                         (D.field "releaseHours" D.string)
                         (D.field "releaseSeconds" D.string)
                 outboxDecoder =
-                    D.map6 OutboxItem
+                    D.map7 OutboxItem
                         (D.field "id" D.string)
                         (D.field "subject" D.string)
+                        (D.field "recipient" D.string)
                         (D.field "status" D.string)
                         (D.field "envelope" D.string)
                         (D.field "createdAt" D.string)
@@ -797,6 +826,11 @@ identityCard model =
                             , onClick ImportIdentity
                             ]
                             [ text "Restore owl" ]
+                        , button
+                            [ class "mt-2 ml-2 rounded-xl border border-line px-3 py-2 text-sm text-ink"
+                            , onClick ImportIdentityFile
+                            ]
+                            [ text "Import file" ]
                         ]
                     ]
                 ]
@@ -1038,6 +1072,14 @@ outboxCard model =
           else
             div [ class "mt-5 space-y-3" ]
                 (List.map outboxItemView model.outbox)
+        , if List.isEmpty model.outbox then
+            text ""
+          else
+            button
+                [ class "mt-5 rounded-xl border border-line px-3 py-2 text-sm text-ink"
+                , onClick ArchiveOutbox
+                ]
+                [ text "Archive outbox" ]
         ]
 
 
@@ -1049,6 +1091,7 @@ outboxItemView item =
             , span [ class "rounded-full border border-line px-2 py-1 text-xs text-ink-soft" ] [ text item.status ]
             ]
         , p [ class "mt-2 truncate font-mono text-xs text-ink-soft" ] [ text item.id ]
+        , p [ class "mt-1 break-all font-mono text-xs text-ink-soft" ] [ text ("To " ++ item.recipient) ]
         , p [ class "mt-1 text-xs text-ink-soft" ] [ text item.createdAt ]
         , if item.error /= "" then
             p [ class "mt-2 text-xs text-wax" ] [ text item.error ]
@@ -1076,6 +1119,14 @@ sentCard model =
           else
             div [ class "mt-5 space-y-3" ]
                 (List.map sentLetterView model.sent)
+        , if List.isEmpty model.sent then
+            text ""
+          else
+            button
+                [ class "mt-5 rounded-xl border border-line px-3 py-2 text-sm text-ink"
+                , onClick ArchiveSent
+                ]
+                [ text "Archive sent letters" ]
         ]
 
 

@@ -10,6 +10,10 @@
       content="Hedwig is a peer-to-peer letter desk. Write whenever you like. Open the sealed post once each day."
     />
     <meta name="theme-color" content="#f3eee4" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' http://localhost:* http://127.0.0.1:* https://*.drand.sh https://api.drand.sh wss: ws:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+    />
     <title>Hedwig</title>
   </head>
   <body>

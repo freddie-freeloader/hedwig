@@ -43,6 +43,10 @@ type ElmApp = {
     identityExported: { send: (payload: unknown) => void }
     importIdentity: { send: (payload: unknown) => void; subscribe?: (callback: (payload: unknown) => void) => void }
     downloadIdentity: { send: (payload: unknown) => void; subscribe?: (callback: (payload: unknown) => void) => void }
+    importIdentityFile: { send: (payload: unknown) => void; subscribe?: (callback: (payload: unknown) => void) => void }
+    identityFileLoaded: { send: (payload: unknown) => void }
+    archiveOutbox: { send: (payload: unknown) => void; subscribe?: (callback: (payload: unknown) => void) => void }
+    archiveSent: { send: (payload: unknown) => void; subscribe?: (callback: (payload: unknown) => void) => void }
     retryEnvelope: { send: (payload: unknown) => void; subscribe?: (callback: (payload: unknown) => void) => void }
     outboxUpdated: { send: (payload: unknown) => void }
   }
@@ -171,6 +175,27 @@ export class HedwigBridge {
     })
     app.ports.retryEnvelope.subscribe?.((payload) => {
       this.retryEnvelope(String(payload))
+    })
+    app.ports.importIdentityFile.subscribe?.(() => {
+      this.openIdentityFile()
+    })
+    app.ports.archiveOutbox.subscribe?.(() => {
+      if (!window.confirm('Clear all prepared outbox entries from this browser?')) return
+      const outbox = this.readArray('hedwig-outbox')
+      const archived = this.readArray('hedwig-outbox-archive')
+      localStorage.setItem('hedwig-outbox-archive', JSON.stringify([...outbox, ...archived].slice(0, 200)))
+      localStorage.removeItem('hedwig-outbox')
+      this.loadState()
+      this.log('Outbox archived locally')
+    })
+    app.ports.archiveSent.subscribe?.(() => {
+      if (!window.confirm('Clear all full sent-letter copies from this browser?')) return
+      const sent = this.readArray('hedwig-sent')
+      const archived = this.readArray('hedwig-sent-archive')
+      localStorage.setItem('hedwig-sent-archive', JSON.stringify([...sent, ...archived].slice(0, 200)))
+      localStorage.removeItem('hedwig-sent')
+      this.loadState()
+      this.log('Sent letters archived locally')
     })
 
     void this.initializeIdentity({}).then(() => this.loadState())
@@ -343,6 +368,7 @@ export class HedwigBridge {
   private saveOutboxItem(
     id: string,
     subject: string,
+    recipient: string,
     envelope: string,
     status: 'pending' | 'sent' | 'failed',
     error = '',
@@ -350,6 +376,7 @@ export class HedwigBridge {
     const outbox = this.readArray('hedwig-outbox') as Array<{
       id: string
       subject: string
+      recipient: string
       status: string
       envelope: string
       createdAt: string
@@ -358,6 +385,7 @@ export class HedwigBridge {
     const item = {
       id,
       subject,
+      recipient,
       status,
       envelope,
       createdAt: new Date().toISOString(),
@@ -505,6 +533,15 @@ export class HedwigBridge {
       if (stored.address !== makeAddress(edPublic, xPublic)) {
         throw new Error('Identity address does not match backup keys')
       }
+      if (this.identity && this.identity.address !== stored.address) {
+        const confirmed = window.confirm(
+          'Restore this backup and replace the current owl identity? This cannot be undone.',
+        )
+        if (!confirmed) {
+          this.log('Identity restore cancelled')
+          return
+        }
+      }
       this.identity = {
         name: stored.name,
         address: stored.address,
@@ -520,6 +557,22 @@ export class HedwigBridge {
     } catch (caught) {
       this.error(caught instanceof Error ? caught.message : 'Identity backup could not be restored')
     }
+  }
+
+  private openIdentityFile(): void {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = 'application/json,.json'
+    input.addEventListener('change', () => {
+      const file = input.files?.[0]
+      if (!file) return
+      void file.text().then((backup) => {
+        this.send('identityFileLoaded', { backup })
+      }).catch(() => {
+        this.error('Identity file could not be read')
+      })
+    })
+    input.click()
   }
 
   private ensurePeer(): RTCPeerConnection {
@@ -768,11 +821,11 @@ export class HedwigBridge {
         'pending',
       )
       if (!this.channel || this.channel.readyState !== 'open') {
-        this.saveOutboxItem(id, request.subject.trim(), serialized, 'failed', 'Connect to the peer before sending')
+        this.saveOutboxItem(id, request.subject.trim(), request.recipient.trim(), serialized, 'failed', 'Connect to the peer before sending')
         this.updateSentStatus(id, 'failed')
         throw new Error('Connect to the peer before sending')
       }
-      this.saveOutboxItem(id, request.subject.trim(), serialized, 'pending')
+      this.saveOutboxItem(id, request.subject.trim(), request.recipient.trim(), serialized, 'pending')
       this.log(`Sending envelope ${id}: ${request.subject.trim()} (release round ${releaseRound})`)
       this.sendTransfer(serialized)
       this.send('envelopeSent', { envelope: serialized, confirmed: false, envelopeId: id })
