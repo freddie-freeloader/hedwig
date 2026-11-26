@@ -37,6 +37,7 @@ declare module '*.elm' {
       downloadIdentity: { send: (payload: unknown) => void; subscribe: (callback: (payload: string) => void) => void }
       importIdentityFile: { send: (payload: unknown) => void; subscribe: (callback: (payload: unknown) => void) => void }
       identityFileLoaded: { send: (payload: unknown) => void; subscribe: (callback: (payload: unknown) => void) => void }
+      resetConnection: { send: (payload: unknown) => void; subscribe: (callback: (payload: unknown) => void) => void }
       archiveOutbox: { send: (payload: unknown) => void; subscribe: (callback: (payload: unknown) => void) => void }
       archiveSent: { send: (payload: unknown) => void; subscribe: (callback: (payload: unknown) => void) => void }
       retryEnvelope: { send: (payload: unknown) => void; subscribe: (callback: (payload: unknown) => void) => void }

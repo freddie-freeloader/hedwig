@@ -149,3 +149,20 @@ test('connects two browser contexts by manual WebRTC signaling', async ({ browse
   await recipient.close()
   await sender.close()
 })
+
+test('offers an accessible confirmation before identity restore', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Owl', exact: true }).click()
+  await page.getByPlaceholder('Paste backup JSON').fill('{}')
+  await page.getByRole('button', { name: 'Restore owl' }).click()
+  await expect(page.getByRole('dialog', { name: 'Restore this owl?' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Cancel' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Confirm' })).toBeVisible()
+})
+
+test('clears stale signaling with reset connection', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Owl', exact: true }).click()
+  await page.getByRole('button', { name: 'Reset connection' }).click()
+  await expect(page.getByText('Disconnected', { exact: true }).first()).toBeVisible()
+})
