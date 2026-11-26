@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { reassembleTransfer, splitTransfer } from '../../src/transfer.ts'
 
 test('loads the dark desk and exposes owl identity', async ({ page }) => {
   await page.goto('/')
@@ -194,15 +195,30 @@ test('archives and restores an outbox item', async ({ page }) => {
 
 test('delivers bytes over a real same-page WebRTC data channel', async ({ page }) => {
   await page.goto('/')
-  const received = await page.evaluate(async () => {
+  const payload = JSON.stringify({
+    v: 1,
+    envelopeId: 'AbCdEfGh12345678',
+    body: 'x'.repeat(20_000),
+  })
+  const frames = splitTransfer(payload, 'AbCdEfGh12345678')
+  const received = await page.evaluate(async (transferFrames) => {
     const left = new RTCPeerConnection({ iceServers: [] })
     const right = new RTCPeerConnection({ iceServers: [] })
-    const receive = new Promise<string>((resolve, reject) => {
+    const receive = new Promise<string[]>((resolve, reject) => {
       const timeout = window.setTimeout(() => reject(new Error('loopback timeout')), 10_000)
+      const chunks = new Map<number, string>()
       right.ondatachannel = event => {
         event.channel.onmessage = message => {
-          window.clearTimeout(timeout)
-          resolve(String(message.data))
+          const frame = JSON.parse(String(message.data)) as {
+            chunkIndex: number
+            chunkCount: number
+            payload: string
+          }
+          chunks.set(frame.chunkIndex, frame.payload)
+          if (chunks.size === frame.chunkCount) {
+            window.clearTimeout(timeout)
+            resolve(Array.from({ length: frame.chunkCount }, (_, index) => chunks.get(index) ?? ''))
+          }
         }
       }
     })
@@ -226,11 +242,20 @@ test('delivers bytes over a real same-page WebRTC data channel', async ({ page }
       }
       channel.onopen = () => resolve()
     })
-    channel.send('real-webRTC-loopback')
-    const value = await receive
+    for (const frame of transferFrames) channel.send(JSON.stringify(frame))
+    const chunks = await receive
     left.close()
     right.close()
-    return value
-  })
-  expect(received).toBe('real-webRTC-loopback')
+    return chunks
+  }, frames)
+  expect(received.join('')).toBe(payload)
+
+  let session: Parameters<typeof reassembleTransfer>[0] = null
+  let result: ReturnType<typeof reassembleTransfer>['result'] = { ok: false, reason: 'missing-chunks' }
+  for (const frame of frames) {
+    const next = reassembleTransfer(session, frame)
+    session = next.session
+    result = next.result
+  }
+  expect(result).toEqual({ ok: true, payload })
 })
