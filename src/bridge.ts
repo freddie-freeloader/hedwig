@@ -45,6 +45,7 @@ type ElmApp = {
     downloadIdentity: { send: (payload: unknown) => void; subscribe?: (callback: (payload: unknown) => void) => void }
     importIdentityFile: { send: (payload: unknown) => void; subscribe?: (callback: (payload: unknown) => void) => void }
     identityFileLoaded: { send: (payload: unknown) => void }
+    resetConnection: { send: (payload: unknown) => void; subscribe?: (callback: (payload: unknown) => void) => void }
     archiveOutbox: { send: (payload: unknown) => void; subscribe?: (callback: (payload: unknown) => void) => void }
     archiveSent: { send: (payload: unknown) => void; subscribe?: (callback: (payload: unknown) => void) => void }
     retryEnvelope: { send: (payload: unknown) => void; subscribe?: (callback: (payload: unknown) => void) => void }
@@ -127,6 +128,15 @@ function randomId(): string {
   return encodeBase64Url(randomBytes(18)).replace(/=+$/, '')
 }
 
+function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
+  if (left.length !== right.length) return false
+  let different = 0
+  for (let index = 0; index < left.length; index += 1) {
+    different |= (left[index] ?? 0) ^ (right[index] ?? 0)
+  }
+  return different === 0
+}
+
 export class HedwigBridge {
   private readonly app: ElmApp
   private identity: Identity | null = null
@@ -180,7 +190,6 @@ export class HedwigBridge {
       this.openIdentityFile()
     })
     app.ports.archiveOutbox.subscribe?.(() => {
-      if (!window.confirm('Clear all prepared outbox entries from this browser?')) return
       const outbox = this.readArray('hedwig-outbox')
       const archived = this.readArray('hedwig-outbox-archive')
       localStorage.setItem('hedwig-outbox-archive', JSON.stringify([...outbox, ...archived].slice(0, 200)))
@@ -189,13 +198,15 @@ export class HedwigBridge {
       this.log('Outbox archived locally')
     })
     app.ports.archiveSent.subscribe?.(() => {
-      if (!window.confirm('Clear all full sent-letter copies from this browser?')) return
       const sent = this.readArray('hedwig-sent')
       const archived = this.readArray('hedwig-sent-archive')
       localStorage.setItem('hedwig-sent-archive', JSON.stringify([...sent, ...archived].slice(0, 200)))
       localStorage.removeItem('hedwig-sent')
       this.loadState()
       this.log('Sent letters archived locally')
+    })
+    app.ports.resetConnection.subscribe?.(() => {
+      this.resetConnection()
     })
 
     void this.initializeIdentity({}).then(() => this.loadState())
@@ -333,6 +344,8 @@ export class HedwigBridge {
     }>
     const outbox = this.readArray('hedwig-outbox')
     const sent = this.readArray('hedwig-sent')
+    const archivedOutbox = this.readArray('hedwig-outbox-archive')
+    const archivedSent = this.readArray('hedwig-sent-archive')
     for (const envelope of sealed) {
       try {
         const outer = JSON.parse(envelope) as OuterEnvelope
@@ -351,6 +364,8 @@ export class HedwigBridge {
       opened,
       outbox,
       sent,
+      archivedOutbox,
+      archivedSent,
     })
   }
 
@@ -428,6 +443,7 @@ export class HedwigBridge {
       body,
       releaseRound,
       sentAt,
+      sentAtLocal: new Date().toISOString(),
       status,
     }
     localStorage.setItem(
@@ -530,17 +546,17 @@ export class HedwigBridge {
       const xSecret = decodeBase64Url(stored.xSecret)
       const xPublic = decodeBase64Url(stored.xPublic)
       if (!edSecret || !edPublic || !xSecret || !xPublic) throw new Error('Identity backup is invalid')
+      if (edSecret.length !== 32 || edPublic.length !== 32 || xSecret.length !== 32 || xPublic.length !== 32) {
+        throw new Error('Identity backup contains invalid key lengths')
+      }
+      if (!bytesEqual(ed25519.getPublicKey(edSecret), edPublic)) {
+        throw new Error('Ed25519 backup keys do not match')
+      }
+      if (!bytesEqual(x25519.getPublicKey(xSecret), xPublic)) {
+        throw new Error('X25519 backup keys do not match')
+      }
       if (stored.address !== makeAddress(edPublic, xPublic)) {
         throw new Error('Identity address does not match backup keys')
-      }
-      if (this.identity && this.identity.address !== stored.address) {
-        const confirmed = window.confirm(
-          'Restore this backup and replace the current owl identity? This cannot be undone.',
-        )
-        if (!confirmed) {
-          this.log('Identity restore cancelled')
-          return
-        }
       }
       this.identity = {
         name: stored.name,
@@ -573,6 +589,20 @@ export class HedwigBridge {
       })
     })
     input.click()
+  }
+
+  private resetConnection(): void {
+    this.chunkSession = null
+    if (this.channel) {
+      this.channel.close()
+      this.channel = null
+    }
+    if (this.peer) {
+      this.peer.close()
+      this.peer = null
+    }
+    this.send('connectionStatus', { status: 'disconnected' })
+    this.log('Connection reset; old invitation and answer cleared')
   }
 
   private ensurePeer(): RTCPeerConnection {
@@ -652,7 +682,8 @@ export class HedwigBridge {
       }
       this.receivedEnvelopeIds.add(envelope.envelopeId)
       const sealed = this.readArray('hedwig-sealed') as string[]
-      sealed.unshift(JSON.stringify(envelope))
+      const receivedEnvelope = { ...envelope, receivedAt: new Date().toISOString() }
+      sealed.unshift(JSON.stringify(receivedEnvelope))
       localStorage.setItem('hedwig-sealed', JSON.stringify(sealed.slice(0, 100)))
       this.log(`Envelope received: ${envelope.envelopeId}`)
       channel.send(JSON.stringify({ type: 'delivery-confirmation', envelopeId: envelope.envelopeId }))
@@ -660,6 +691,7 @@ export class HedwigBridge {
       this.send('envelopeReceived', {
         envelope: JSON.stringify(envelope),
         releaseRound: envelope.releaseRound,
+        receivedAt: receivedEnvelope.receivedAt,
       })
       this.loadState()
     } catch (caught) {
@@ -898,6 +930,8 @@ export class HedwigBridge {
         body: content.body,
         releaseRound: inner.releaseRound,
         sentAt: content.sentAt,
+        receivedAt: new Date().toISOString(),
+        openedAt: new Date().toISOString(),
       }
       if (this.receivedEnvelopeIds.has(inner.id)) {
         // Keep replay protection while allowing the persisted opened letter to surface.

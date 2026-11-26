@@ -37,6 +37,7 @@ port importIdentityFile : () -> Cmd msg
 port identityFileLoaded : (E.Value -> msg) -> Sub msg
 port archiveOutbox : () -> Cmd msg
 port archiveSent : () -> Cmd msg
+port resetConnection : () -> Cmd msg
 port retryEnvelope : String -> Cmd msg
 port outboxUpdated : (E.Value -> msg) -> Sub msg
 
@@ -54,6 +55,7 @@ type alias Letter =
     , body : String
     , releaseRound : Int
     , sentAt : String
+    , receivedAt : String
     }
 
 
@@ -65,6 +67,7 @@ type alias SentLetter =
     , releaseRound : Int
     , sentAt : String
     , status : String
+    , sentAtLocal : String
     }
 
 
@@ -105,6 +108,9 @@ type alias Model =
     , importBackup : String
     , outbox : List OutboxItem
     , sent : List SentLetter
+    , archivedOutbox : List OutboxItem
+    , archivedSent : List SentLetter
+    , confirmation : Maybe String
     }
 
 
@@ -181,6 +187,12 @@ type Msg
     | IdentityFileLoadedResult D.Value
     | ArchiveOutbox
     | ArchiveSent
+    | RequestIdentityRestore
+    | RequestOutboxArchive
+    | RequestSentArchive
+    | CancelConfirmation
+    | ConfirmAction
+    | ResetConnection
     | SaveDraft
     | AddRecipientContact
     | SelectRecipient String
@@ -230,6 +242,9 @@ init flags =
       , importBackup = ""
       , outbox = []
       , sent = []
+      , archivedOutbox = []
+      , archivedSent = []
+      , confirmation = Nothing
       }
     , initializeIdentity (E.object [ ( "name", E.string "" ) ])
     )
@@ -286,16 +301,16 @@ update msg model =
             ( { model | page = Help }, Cmd.none )
 
         CopyAddress ->
-            ( model, copyText model.address )
+            ( { model | notice = "Owl address copied" }, copyText model.address )
 
         CopyInvitation ->
-            ( model, copyText model.invitation )
+            ( { model | notice = "Invitation copied" }, copyText model.invitation )
 
         CopyAnswer ->
-            ( model, copyText model.answer )
+            ( { model | notice = "Answer copied" }, copyText model.answer )
 
         CopyBackup ->
-            ( model, copyText model.identityBackup )
+            ( { model | notice = "Identity backup copied" }, copyText model.identityBackup )
 
         NameChanged value ->
             ( { model | name = value }, Cmd.none )
@@ -442,13 +457,18 @@ update msg model =
         LetterDecryptedResult value ->
             let
                 letterDecoder =
-                    D.map6 Letter
+                    D.map7 Letter
                         (D.field "id" D.string)
                         (D.field "from" D.string)
                         (D.field "subject" D.string)
                         (D.field "body" D.string)
                         (D.field "releaseRound" D.int)
                         (D.field "sentAt" D.string)
+                        (D.oneOf
+                            [ D.field "receivedAt" D.string
+                            , D.succeed ""
+                            ]
+                        )
             in
             case D.decodeValue letterDecoder value of
                 Ok letter ->
@@ -529,7 +549,33 @@ update msg model =
             if model.importBackup == "" then
                 ( { model | notice = "Paste an identity backup first" }, Cmd.none )
             else
-                ( model, importIdentity model.importBackup )
+                ( { model | confirmation = Just "restore-identity" }, Cmd.none )
+
+        RequestIdentityRestore ->
+            ( { model | confirmation = Just "restore-identity" }, Cmd.none )
+
+        RequestOutboxArchive ->
+            ( { model | confirmation = Just "archive-outbox" }, Cmd.none )
+
+        RequestSentArchive ->
+            ( { model | confirmation = Just "archive-sent" }, Cmd.none )
+
+        CancelConfirmation ->
+            ( { model | confirmation = Nothing }, Cmd.none )
+
+        ConfirmAction ->
+            case model.confirmation of
+                Just "restore-identity" ->
+                    ( { model | confirmation = Nothing }, importIdentity model.importBackup )
+
+                Just "archive-outbox" ->
+                    ( { model | confirmation = Nothing }, archiveOutbox () )
+
+                Just "archive-sent" ->
+                    ( { model | confirmation = Nothing }, archiveSent () )
+
+                _ ->
+                    ( { model | confirmation = Nothing }, Cmd.none )
 
         DownloadIdentity ->
             ( model, downloadIdentity model.identityBackup )
@@ -552,6 +598,16 @@ update msg model =
         ArchiveSent ->
             ( model, archiveSent () )
 
+        ResetConnection ->
+            ( { model
+                | invitation = ""
+                , answer = ""
+                , connectionStatus = "Disconnected"
+                , notice = "Connection reset"
+              }
+            , resetConnection ()
+            )
+
         StateLoadedResult value ->
             let
                 contactDecoder =
@@ -569,13 +625,13 @@ update msg model =
                     D.map7 OutboxItem
                         (D.field "id" D.string)
                         (D.field "subject" D.string)
-                        (D.field "recipient" D.string)
+                        (D.oneOf [ D.field "recipient" D.string, D.succeed "" ])
                         (D.field "status" D.string)
                         (D.field "envelope" D.string)
                         (D.field "createdAt" D.string)
                         (D.field "error" D.string)
                 sentDecoder =
-                    D.map7 SentLetter
+                    D.map8 SentLetter
                         (D.field "id" D.string)
                         (D.field "to" D.string)
                         (D.field "subject" D.string)
@@ -583,33 +639,47 @@ update msg model =
                         (D.field "releaseRound" D.int)
                         (D.field "sentAt" D.string)
                         (D.field "status" D.string)
+                        (D.oneOf
+                            [ D.field "sentAtLocal" D.string
+                            , D.succeed ""
+                            ]
+                        )
                 decoder =
-                    D.map6
-                        (\contacts drafts sealed inbox outbox sent ->
+                    D.map8
+                        (\contacts drafts sealed inbox outbox sent archivedOutbox archivedSent ->
                             { contacts = contacts
                             , drafts = drafts
                             , sealed = sealed
                             , inbox = inbox
                             , outbox = outbox
                             , sent = sent
+                            , archivedOutbox = archivedOutbox
+                            , archivedSent = archivedSent
                             })
                         (D.field "contacts" (D.list contactDecoder))
                         (D.field "drafts" (D.list draftDecoder))
                         (D.field "sealed" (D.list D.string))
                         (D.field "opened"
                             (D.list
-                                (D.map6 Letter
+                                (D.map7 Letter
                                     (D.field "id" D.string)
                                     (D.field "from" D.string)
                                     (D.field "subject" D.string)
                                     (D.field "body" D.string)
                                     (D.field "releaseRound" D.int)
                                     (D.field "sentAt" D.string)
+                                    (D.oneOf
+                                        [ D.field "receivedAt" D.string
+                                        , D.succeed ""
+                                        ]
+                                    )
                                 )
                             )
                         )
                         (D.field "outbox" (D.list outboxDecoder))
                         (D.field "sent" (D.list sentDecoder))
+                        (D.field "archivedOutbox" (D.list outboxDecoder))
+                        (D.field "archivedSent" (D.list sentDecoder))
             in
             case D.decodeValue decoder value of
                 Ok state ->
@@ -637,6 +707,8 @@ update msg model =
                         , inbox = state.inbox
                         , outbox = state.outbox
                         , sent = state.sent
+                        , archivedOutbox = state.archivedOutbox
+                        , archivedSent = state.archivedSent
                         , draftEnvelope =
                             case List.head state.sealed of
                                 Just envelope ->
@@ -750,6 +822,11 @@ view model =
                 div [ class "mx-auto max-w-3xl" ] [ sentCard model ]
             Help ->
                 helpPage
+        , case model.confirmation of
+            Nothing ->
+                text ""
+            Just action ->
+                confirmationDialog action
         ]
 
 
@@ -823,7 +900,7 @@ identityCard model =
                             []
                         , button
                             [ class "mt-2 rounded-xl bg-moss px-3 py-2 text-sm text-white"
-                            , onClick ImportIdentity
+                            , onClick RequestIdentityRestore
                             ]
                             [ text "Restore owl" ]
                         , button
@@ -905,6 +982,11 @@ connectionCard model =
                     , onClick SetRemoteAnswer
                     ]
                     [ text "Connect" ]
+                , button
+                    [ class "mt-2 ml-2 rounded-xl border border-line px-3 py-2 text-sm text-ink"
+                    , onClick ResetConnection
+                    ]
+                    [ text "Reset connection" ]
                 ]
             ]
         ]
@@ -1047,6 +1129,7 @@ receivedLetterView letter =
     div [ class "rounded-xl border border-line bg-paper p-4" ]
         [ p [ class "text-xs text-gold" ] [ text ("Round " ++ String.fromInt letter.releaseRound) ]
         , h2 [ class "mt-1 font-serif text-xl text-ink" ] [ text letter.subject ]
+        , p [ class "mt-1 text-xs text-ink-soft" ] [ text ("Received " ++ (if letter.receivedAt == "" then letter.sentAt else letter.receivedAt)) ]
         , p [ class "mt-2 whitespace-pre-wrap text-sm leading-relaxed text-ink-soft" ] [ text letter.body ]
         ]
 
@@ -1058,6 +1141,60 @@ tabButton label msg =
         , onClick msg
         ]
         [ text label ]
+
+
+confirmationDialog : String -> Html Msg
+confirmationDialog action =
+    div
+        [ class "dialog-backdrop"
+        , Html.Attributes.attribute "role" "presentation"
+        ]
+        [ div
+            [ class "dialog-card"
+            , Html.Attributes.attribute "role" "dialog"
+            , Html.Attributes.attribute "aria-modal" "true"
+            , Html.Attributes.attribute "aria-labelledby" "confirm-title"
+            ]
+            [ h2 [ class "font-serif text-2xl text-ink", Html.Attributes.id "confirm-title" ]
+                [ text
+                    (case action of
+                        "restore-identity" ->
+                            "Restore this owl?"
+                        "archive-outbox" ->
+                            "Archive the outbox?"
+                        "archive-sent" ->
+                            "Archive sent letters?"
+                        _ ->
+                            "Confirm this action?"
+                    )
+                ]
+            , p [ class "mt-3 text-sm leading-relaxed text-ink-soft" ]
+                [ text
+                    (case action of
+                        "restore-identity" ->
+                            "This replaces the current owl identity. Keep a backup first."
+                        "archive-outbox" ->
+                            "Prepared outbox entries move to the local archive."
+                        "archive-sent" ->
+                            "Full sent-letter copies move to the local archive."
+                        _ ->
+                            "Continue with this action?"
+                    )
+                ]
+            , div [ class "mt-5 flex justify-end gap-2" ]
+                [ button
+                    [ class "rounded-xl border border-line px-4 py-2 text-sm text-ink"
+                    , onClick CancelConfirmation
+                    ]
+                    [ text "Cancel" ]
+                , button
+                    [ class "rounded-xl bg-wax px-4 py-2 text-sm text-white"
+                    , onClick ConfirmAction
+                    ]
+                    [ text "Confirm" ]
+                ]
+            ]
+        ]
 
 
 outboxCard : Model -> Html Msg
@@ -1077,9 +1214,11 @@ outboxCard model =
           else
             button
                 [ class "mt-5 rounded-xl border border-line px-3 py-2 text-sm text-ink"
-                , onClick ArchiveOutbox
+                , onClick RequestOutboxArchive
                 ]
                 [ text "Archive outbox" ]
+        , p [ class "mt-4 text-xs text-ink-soft" ]
+            [ text ("Archived: " ++ String.fromInt (List.length model.archivedOutbox)) ]
         ]
 
 
@@ -1124,9 +1263,11 @@ sentCard model =
           else
             button
                 [ class "mt-5 rounded-xl border border-line px-3 py-2 text-sm text-ink"
-                , onClick ArchiveSent
+                , onClick RequestSentArchive
                 ]
                 [ text "Archive sent letters" ]
+        , p [ class "mt-4 text-xs text-ink-soft" ]
+            [ text ("Archived: " ++ String.fromInt (List.length model.archivedSent)) ]
         ]
 
 
@@ -1138,7 +1279,7 @@ sentLetterView letter =
             , span [ class "shrink-0 rounded-full border border-line px-2 py-1 text-xs text-ink-soft" ] [ text letter.status ]
             ]
         , p [ class "mt-2 break-all font-mono text-xs text-ink-soft" ] [ text ("To " ++ letter.to) ]
-        , p [ class "mt-1 text-xs text-ink-soft" ] [ text (letter.sentAt ++ " · release round " ++ String.fromInt letter.releaseRound) ]
+        , p [ class "mt-1 text-xs text-ink-soft" ] [ text ((if letter.sentAtLocal == "" then letter.sentAt else letter.sentAtLocal) ++ " · release round " ++ String.fromInt letter.releaseRound) ]
         , p [ class "mt-3 whitespace-pre-wrap text-sm leading-relaxed text-ink-soft" ] [ text letter.body ]
         ]
 
