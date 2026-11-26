@@ -168,6 +168,13 @@ test('clears stale signaling with reset connection', async ({ page }) => {
   await expect(page.getByText('Disconnected', { exact: true }).first()).toBeVisible()
 })
 
+test('shows ICE diagnostics after creating an invitation', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Owl', exact: true }).click()
+  await page.getByRole('button', { name: 'Create invitation' }).click()
+  await expect(page.getByText(/ICE candidates|gathering/i).first()).toBeVisible({ timeout: 15_000 })
+})
+
 test('archives and restores an outbox item', async ({ page }) => {
   await page.goto('/')
   await page.evaluate(() => {
