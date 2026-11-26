@@ -9,7 +9,11 @@ import { openBox, sealBox } from './crypto/box.ts'
 import { reassembleTransfer, splitTransfer } from './transfer.ts'
 import type { ChunkSession } from './transfer.ts'
 import { createSignalingEnvelope, parseSignalingEnvelope } from './signaling.ts'
-import { envelopeReplayKey, parseOuterEnvelope } from './envelope.ts'
+import {
+  classifyEnvelopePair,
+  envelopeReplayKey,
+  parseOuterEnvelope,
+} from './envelope.ts'
 
 type ElmApp = {
   ports: {
@@ -151,6 +155,7 @@ export class HedwigBridge {
   private channel: RTCDataChannel | null = null
   private readonly receivedEnvelopeIds = new Set<string>()
   private chunkSession: ChunkSession | null = null
+  private iceCandidateCount = 0
 
   constructor(app: ElmApp) {
     this.app = app
@@ -651,6 +656,7 @@ export class HedwigBridge {
 
   private ensurePeer(): RTCPeerConnection {
     if (this.peer) return this.peer
+    this.iceCandidateCount = 0
     const peer = new RTCPeerConnection({
       iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
     })
@@ -658,6 +664,27 @@ export class HedwigBridge {
       this.send('connectionStatus', { status: peer.connectionState })
       this.log(`Peer connection state: ${peer.connectionState}`)
       if (peer.connectionState === 'failed') this.error('Peer connection failed')
+    })
+    peer.addEventListener('icecandidate', (event) => {
+      if (event.candidate) {
+        this.iceCandidateCount += 1
+        this.send('connectionStatus', {
+          status: peer.connectionState,
+          detail: `${this.iceCandidateCount} ICE candidates · gathering ${peer.iceGatheringState}`,
+        })
+      }
+    })
+    peer.addEventListener('icegatheringstatechange', () => {
+      this.send('connectionStatus', {
+        status: peer.connectionState,
+        detail: `${this.iceCandidateCount} ICE candidates · gathering ${peer.iceGatheringState}`,
+      })
+    })
+    peer.addEventListener('iceconnectionstatechange', () => {
+      this.send('connectionStatus', {
+        status: peer.connectionState,
+        detail: `ICE ${peer.iceConnectionState} · ${this.iceCandidateCount} candidates`,
+      })
     })
     peer.addEventListener('datachannel', (event) => {
       this.attachChannel(event.channel)
@@ -933,14 +960,11 @@ export class HedwigBridge {
       const plaintext = await timelockDecrypt(outer.tlock, client)
       this.log(`TLock decryption succeeded for round ${outer.releaseRound}`)
       const inner = JSON.parse(decodeUtf8(plaintext)) as InnerEnvelope
-
-      if (
-        inner.v !== 1
-        || inner.id !== outer.envelopeId
-        || inner.to !== outer.to
-        || inner.releaseRound !== outer.releaseRound
-      ) {
-        throw new Error('Envelope fields do not match')
+      const pair = classifyEnvelopePair(outer, inner, this.identity.address)
+      if (!pair.ok) {
+        if (pair.reason === 'wrong-recipient') throw new Error('This letter belongs to another owl')
+        if (pair.reason === 'wrong-envelope') throw new Error('Envelope fields do not match')
+        throw new Error('Envelope fields are invalid')
       }
 
       const sender = parseAddress(inner.from)

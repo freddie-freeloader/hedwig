@@ -101,6 +101,7 @@ type alias Model =
     , invitation : String
     , answer : String
     , connectionStatus : String
+    , iceDetails : String
     , notice : String
     , sentEnvelope : String
     , inbox : List Letter
@@ -239,6 +240,7 @@ init flags =
       , invitation = ""
       , answer = ""
       , connectionStatus = "Disconnected"
+      , iceDetails = ""
       , notice = ""
       , sentEnvelope = ""
       , inbox = []
@@ -389,9 +391,19 @@ update msg model =
             ( model, setRemoteAnswer model.answer )
 
         ConnectionResult value ->
-            case D.decodeValue (D.field "status" D.string) value of
-                Ok status ->
-                    ( { model | connectionStatus = status }, Cmd.none )
+            let
+                decoder =
+                    D.map2 Tuple.pair
+                        (D.field "status" D.string)
+                        (D.oneOf
+                            [ D.field "detail" D.string
+                            , D.succeed ""
+                            ]
+                        )
+            in
+            case D.decodeValue decoder value of
+                Ok ( status, detail ) ->
+                    ( { model | connectionStatus = status, iceDetails = detail }, Cmd.none )
                 Err _ ->
                     ( model, Cmd.none )
 
@@ -947,6 +959,10 @@ connectionCard model =
                 ]
             , span [ class "rounded-full border border-line px-2.5 py-1 text-xs text-ink-soft" ] [ text model.connectionStatus ]
             ]
+        , if model.iceDetails == "" then
+            text ""
+          else
+            p [ class "mt-2 font-mono text-xs text-ink-soft" ] [ text model.iceDetails ]
         , div [ class "mt-5 space-y-4" ]
             [ div [ class "rounded-xl border border-line bg-paper p-4" ]
                 [ p [ class "text-sm font-semibold text-ink" ] [ text "1. One owl creates the invitation" ]

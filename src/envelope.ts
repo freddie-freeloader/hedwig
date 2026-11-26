@@ -60,3 +60,34 @@ export function validateEnvelopePair(
 export function envelopeReplayKey(envelope: OuterEnvelope): string {
   return `${envelope.to}:${envelope.envelopeId}`
 }
+
+export type EnvelopePairResult =
+  | { ok: true }
+  | { ok: false; reason: 'wrong-recipient' | 'wrong-envelope' | 'invalid-fields' }
+
+export function classifyEnvelopePair(
+  outer: OuterEnvelope,
+  inner: InnerEnvelope,
+  recipientAddress: string,
+): EnvelopePairResult {
+  if (outer.to !== recipientAddress) {
+    return { ok: false, reason: 'wrong-recipient' }
+  }
+  if (
+    inner.v !== 1
+    || inner.id !== outer.envelopeId
+    || inner.from !== outer.from
+    || inner.to !== outer.to
+    || inner.releaseRound !== outer.releaseRound
+  ) {
+    return { ok: false, reason: 'wrong-envelope' }
+  }
+  if (
+    decodeFixed(inner.ephPub, 32) === null
+    || decodeFixed(inner.nonce, 24) === null
+    || decodeFixed(inner.sig, 64) === null
+  ) {
+    return { ok: false, reason: 'invalid-fields' }
+  }
+  return { ok: true }
+}
