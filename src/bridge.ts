@@ -8,6 +8,7 @@ import { concatBytes, decodeBase64Url, encodeBase64Url } from './crypto/bytes.ts
 import { openBox, sealBox } from './crypto/box.ts'
 import { reassembleTransfer, splitTransfer } from './transfer.ts'
 import type { ChunkSession } from './transfer.ts'
+import { createSignalingEnvelope, parseSignalingEnvelope } from './signaling.ts'
 
 type ElmApp = {
   ports: {
@@ -48,6 +49,10 @@ type ElmApp = {
     resetConnection: { send: (payload: unknown) => void; subscribe?: (callback: (payload: unknown) => void) => void }
     archiveOutbox: { send: (payload: unknown) => void; subscribe?: (callback: (payload: unknown) => void) => void }
     archiveSent: { send: (payload: unknown) => void; subscribe?: (callback: (payload: unknown) => void) => void }
+    restoreOutbox: { send: (payload: unknown) => void; subscribe?: (callback: (payload: unknown) => void) => void }
+    deleteArchivedOutbox: { send: (payload: unknown) => void; subscribe?: (callback: (payload: unknown) => void) => void }
+    restoreSent: { send: (payload: unknown) => void; subscribe?: (callback: (payload: unknown) => void) => void }
+    deleteArchivedSent: { send: (payload: unknown) => void; subscribe?: (callback: (payload: unknown) => void) => void }
     retryEnvelope: { send: (payload: unknown) => void; subscribe?: (callback: (payload: unknown) => void) => void }
     outboxUpdated: { send: (payload: unknown) => void }
   }
@@ -97,6 +102,7 @@ type OuterEnvelope = {
   releaseRound: number
   tlock: string
 }
+
 
 function decodeUtf8(bytes: Uint8Array): string {
   return new TextDecoder().decode(bytes)
@@ -204,6 +210,18 @@ export class HedwigBridge {
       localStorage.removeItem('hedwig-sent')
       this.loadState()
       this.log('Sent letters archived locally')
+    })
+    app.ports.restoreOutbox.subscribe?.((payload) => {
+      this.restoreArchived('hedwig-outbox', 'hedwig-outbox-archive', String(payload))
+    })
+    app.ports.deleteArchivedOutbox.subscribe?.((payload) => {
+      this.deleteArchived('hedwig-outbox-archive', String(payload))
+    })
+    app.ports.restoreSent.subscribe?.((payload) => {
+      this.restoreArchived('hedwig-sent', 'hedwig-sent-archive', String(payload))
+    })
+    app.ports.deleteArchivedSent.subscribe?.((payload) => {
+      this.deleteArchived('hedwig-sent-archive', String(payload))
     })
     app.ports.resetConnection.subscribe?.(() => {
       this.resetConnection()
@@ -330,6 +348,24 @@ export class HedwigBridge {
     } catch {
       return []
     }
+  }
+
+  private restoreArchived(liveKey: string, archiveKey: string, id: string): void {
+    const archived = this.readArray(archiveKey) as Array<{ id?: string }>
+    const live = this.readArray(liveKey) as unknown[]
+    const item = archived.find((entry) => entry.id === id)
+    if (!item) return
+    localStorage.setItem(liveKey, JSON.stringify([item, ...live].slice(0, 200)))
+    localStorage.setItem(archiveKey, JSON.stringify(archived.filter((entry) => entry.id !== id)))
+    this.loadState()
+    this.log(`Archived item restored: ${id}`)
+  }
+
+  private deleteArchived(archiveKey: string, id: string): void {
+    const archived = this.readArray(archiveKey) as Array<{ id?: string }>
+    localStorage.setItem(archiveKey, JSON.stringify(archived.filter((entry) => entry.id !== id)))
+    this.loadState()
+    this.log(`Archived item deleted: ${id}`)
   }
 
   private loadState(): void {
@@ -732,7 +768,8 @@ export class HedwigBridge {
       await peer.setLocalDescription(offer)
       await this.waitForIce(peer)
       this.log(`ICE gathering complete (${peer.iceGatheringState})`)
-      this.send('offerCreated', { sdp: JSON.stringify(peer.localDescription) })
+      const envelope = createSignalingEnvelope('offer', peer.localDescription as RTCSessionDescriptionInit)
+      this.send('offerCreated', { sdp: JSON.stringify(envelope) })
       this.send('connectionStatus', { status: 'waiting-for-answer' })
     } catch (caught) {
       this.error(caught instanceof Error ? caught.message : 'Could not create invitation')
@@ -741,14 +778,15 @@ export class HedwigBridge {
 
   private async acceptOffer(serialized: string): Promise<void> {
     try {
-      const description = JSON.parse(serialized) as RTCSessionDescriptionInit
+      const description = parseSignalingEnvelope(serialized, 'offer')
       const peer = this.ensurePeer()
       await peer.setRemoteDescription(description)
       const answer = await peer.createAnswer()
       await peer.setLocalDescription(answer)
       await this.waitForIce(peer)
       this.log(`ICE gathering complete (${peer.iceGatheringState})`)
-      this.send('answerCreated', { sdp: JSON.stringify(peer.localDescription) })
+      const envelope = createSignalingEnvelope('answer', peer.localDescription as RTCSessionDescriptionInit)
+      this.send('answerCreated', { sdp: JSON.stringify(envelope) })
       this.send('connectionStatus', { status: 'waiting-for-peer' })
     } catch (caught) {
       this.error(caught instanceof Error ? caught.message : 'Could not accept invitation')
@@ -757,7 +795,7 @@ export class HedwigBridge {
 
   private async setRemoteAnswer(serialized: string): Promise<void> {
     try {
-      const description = JSON.parse(serialized) as RTCSessionDescriptionInit
+      const description = parseSignalingEnvelope(serialized, 'answer')
       await this.ensurePeer().setRemoteDescription(description)
       this.log('Remote answer applied')
       this.send('connectionStatus', { status: 'connecting' })

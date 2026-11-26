@@ -37,6 +37,10 @@ port importIdentityFile : () -> Cmd msg
 port identityFileLoaded : (E.Value -> msg) -> Sub msg
 port archiveOutbox : () -> Cmd msg
 port archiveSent : () -> Cmd msg
+port restoreOutbox : String -> Cmd msg
+port deleteArchivedOutbox : String -> Cmd msg
+port restoreSent : String -> Cmd msg
+port deleteArchivedSent : String -> Cmd msg
 port resetConnection : () -> Cmd msg
 port retryEnvelope : String -> Cmd msg
 port outboxUpdated : (E.Value -> msg) -> Sub msg
@@ -187,6 +191,10 @@ type Msg
     | IdentityFileLoadedResult D.Value
     | ArchiveOutbox
     | ArchiveSent
+    | RestoreOutbox String
+    | DeleteArchivedOutbox String
+    | RestoreSent String
+    | DeleteArchivedSent String
     | RequestIdentityRestore
     | RequestOutboxArchive
     | RequestSentArchive
@@ -597,6 +605,18 @@ update msg model =
 
         ArchiveSent ->
             ( model, archiveSent () )
+
+        RestoreOutbox id ->
+            ( model, restoreOutbox id )
+
+        DeleteArchivedOutbox id ->
+            ( model, deleteArchivedOutbox id )
+
+        RestoreSent id ->
+            ( model, restoreSent id )
+
+        DeleteArchivedSent id ->
+            ( model, deleteArchivedSent id )
 
         ResetConnection ->
             ( { model
@@ -1219,6 +1239,11 @@ outboxCard model =
                 [ text "Archive outbox" ]
         , p [ class "mt-4 text-xs text-ink-soft" ]
             [ text ("Archived: " ++ String.fromInt (List.length model.archivedOutbox)) ]
+        , if List.isEmpty model.archivedOutbox then
+            text ""
+          else
+            div [ class "mt-3 space-y-2" ]
+                (List.map archivedOutboxView model.archivedOutbox)
         ]
 
 
@@ -1247,6 +1272,26 @@ outboxItemView item =
         ]
 
 
+archivedOutboxView : OutboxItem -> Html Msg
+archivedOutboxView item =
+    div [ class "rounded-xl border border-line bg-paper p-3" ]
+        [ p [ class "text-sm font-medium text-ink" ] [ text item.subject ]
+        , p [ class "mt-1 font-mono text-xs text-ink-soft" ] [ text item.id ]
+        , div [ class "mt-3 flex gap-2" ]
+            [ button
+                [ class "rounded-xl border border-line px-3 py-2 text-xs text-ink"
+                , onClick (RestoreOutbox item.id)
+                ]
+                [ text "Restore" ]
+            , button
+                [ class "rounded-xl border border-line px-3 py-2 text-xs text-wax"
+                , onClick (DeleteArchivedOutbox item.id)
+                ]
+                [ text "Delete" ]
+            ]
+        ]
+
+
 sentCard : Model -> Html Msg
 sentCard model =
     div [ class "rounded-2xl border border-line bg-sheet p-5" ]
@@ -1268,6 +1313,11 @@ sentCard model =
                 [ text "Archive sent letters" ]
         , p [ class "mt-4 text-xs text-ink-soft" ]
             [ text ("Archived: " ++ String.fromInt (List.length model.archivedSent)) ]
+        , if List.isEmpty model.archivedSent then
+            text ""
+          else
+            div [ class "mt-3 space-y-2" ]
+                (List.map archivedSentView model.archivedSent)
         ]
 
 
@@ -1281,6 +1331,26 @@ sentLetterView letter =
         , p [ class "mt-2 break-all font-mono text-xs text-ink-soft" ] [ text ("To " ++ letter.to) ]
         , p [ class "mt-1 text-xs text-ink-soft" ] [ text ((if letter.sentAtLocal == "" then letter.sentAt else letter.sentAtLocal) ++ " · release round " ++ String.fromInt letter.releaseRound) ]
         , p [ class "mt-3 whitespace-pre-wrap text-sm leading-relaxed text-ink-soft" ] [ text letter.body ]
+        ]
+
+
+archivedSentView : SentLetter -> Html Msg
+archivedSentView letter =
+    div [ class "rounded-xl border border-line bg-paper p-3" ]
+        [ p [ class "text-sm font-medium text-ink" ] [ text letter.subject ]
+        , p [ class "mt-1 truncate font-mono text-xs text-ink-soft" ] [ text letter.id ]
+        , div [ class "mt-3 flex gap-2" ]
+            [ button
+                [ class "rounded-xl border border-line px-3 py-2 text-xs text-ink"
+                , onClick (RestoreSent letter.id)
+                ]
+                [ text "Restore" ]
+            , button
+                [ class "rounded-xl border border-line px-3 py-2 text-xs text-wax"
+                , onClick (DeleteArchivedSent letter.id)
+                ]
+                [ text "Delete" ]
+            ]
         ]
 
 
