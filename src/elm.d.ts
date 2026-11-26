@@ -40,6 +40,10 @@ declare module '*.elm' {
       resetConnection: { send: (payload: unknown) => void; subscribe: (callback: (payload: unknown) => void) => void }
       archiveOutbox: { send: (payload: unknown) => void; subscribe: (callback: (payload: unknown) => void) => void }
       archiveSent: { send: (payload: unknown) => void; subscribe: (callback: (payload: unknown) => void) => void }
+      restoreOutbox: { send: (payload: unknown) => void; subscribe: (callback: (payload: unknown) => void) => void }
+      deleteArchivedOutbox: { send: (payload: unknown) => void; subscribe: (callback: (payload: unknown) => void) => void }
+      restoreSent: { send: (payload: unknown) => void; subscribe: (callback: (payload: unknown) => void) => void }
+      deleteArchivedSent: { send: (payload: unknown) => void; subscribe: (callback: (payload: unknown) => void) => void }
       retryEnvelope: { send: (payload: unknown) => void; subscribe: (callback: (payload: unknown) => void) => void }
       outboxUpdated: { send: (payload: unknown) => void; subscribe: (callback: (payload: unknown) => void) => void }
     }

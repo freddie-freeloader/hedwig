@@ -166,3 +166,71 @@ test('clears stale signaling with reset connection', async ({ page }) => {
   await page.getByRole('button', { name: 'Reset connection' }).click()
   await expect(page.getByText('Disconnected', { exact: true }).first()).toBeVisible()
 })
+
+test('archives and restores an outbox item', async ({ page }) => {
+  await page.goto('/')
+  await page.evaluate(() => {
+    localStorage.setItem('hedwig-outbox', JSON.stringify([{
+      id: 'AbCdEfGh12345678',
+      subject: 'Archive test',
+      recipient: 'owl1test',
+      status: 'failed',
+      envelope: '{}',
+      createdAt: new Date().toISOString(),
+      error: 'Connect to the peer',
+    }]))
+  })
+  await page.reload()
+  await page.getByRole('button', { name: /^Outbox/ }).click()
+  await expect(page.getByText('Archive test')).toBeVisible()
+  await page.getByRole('button', { name: 'Archive outbox' }).click()
+  await expect(page.getByRole('dialog', { name: 'Archive the outbox?' })).toBeVisible()
+  await page.getByRole('button', { name: 'Confirm' }).click()
+  await expect(page.getByText('Archived: 1')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Restore' })).toBeVisible()
+  await page.getByRole('button', { name: 'Restore' }).click()
+  await expect(page.getByText('Archive test')).toBeVisible()
+})
+
+test('delivers bytes over a real same-page WebRTC data channel', async ({ page }) => {
+  await page.goto('/')
+  const received = await page.evaluate(async () => {
+    const left = new RTCPeerConnection({ iceServers: [] })
+    const right = new RTCPeerConnection({ iceServers: [] })
+    const receive = new Promise<string>((resolve, reject) => {
+      const timeout = window.setTimeout(() => reject(new Error('loopback timeout')), 10_000)
+      right.ondatachannel = event => {
+        event.channel.onmessage = message => {
+          window.clearTimeout(timeout)
+          resolve(String(message.data))
+        }
+      }
+    })
+    left.onicecandidate = event => {
+      if (event.candidate) void right.addIceCandidate(event.candidate)
+    }
+    right.onicecandidate = event => {
+      if (event.candidate) void left.addIceCandidate(event.candidate)
+    }
+    const channel = left.createDataChannel('hedwig-loopback')
+    const offer = await left.createOffer()
+    await left.setLocalDescription(offer)
+    await right.setRemoteDescription(offer)
+    const answer = await right.createAnswer()
+    await right.setLocalDescription(answer)
+    await left.setRemoteDescription(answer)
+    await new Promise<void>(resolve => {
+      if (channel.readyState === 'open') {
+        resolve()
+        return
+      }
+      channel.onopen = () => resolve()
+    })
+    channel.send('real-webRTC-loopback')
+    const value = await receive
+    left.close()
+    right.close()
+    return value
+  })
+  expect(received).toBe('real-webRTC-loopback')
+})
