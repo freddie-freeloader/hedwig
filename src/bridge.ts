@@ -1,7 +1,8 @@
 import { ed25519, x25519 } from '@noble/curves/ed25519.js'
 import { sha256 } from '@noble/hashes/sha256.js'
 import { randomBytes } from '@noble/ciphers/utils.js'
-import { mainnetClient, timelockDecrypt, timelockEncrypt, Buffer } from 'tlock-js'
+import { timelockDecrypt, timelockEncrypt, Buffer } from 'tlock-js'
+import { quicknetClient } from 'drand-client'
 import { roundForReleaseMs } from './drand.ts'
 import { concatBytes, decodeBase64Url, encodeBase64Url } from './crypto/bytes.ts'
 import { openBox, sealBox } from './crypto/box.ts'
@@ -41,6 +42,7 @@ type ElmApp = {
     exportIdentity: { send: (payload: unknown) => void; subscribe?: (callback: (payload: unknown) => void) => void }
     identityExported: { send: (payload: unknown) => void }
     importIdentity: { send: (payload: unknown) => void; subscribe?: (callback: (payload: unknown) => void) => void }
+    downloadIdentity: { send: (payload: unknown) => void; subscribe?: (callback: (payload: unknown) => void) => void }
     retryEnvelope: { send: (payload: unknown) => void; subscribe?: (callback: (payload: unknown) => void) => void }
     outboxUpdated: { send: (payload: unknown) => void }
   }
@@ -63,6 +65,8 @@ type StoredIdentity = {
   xPublic: string
   address: string
 }
+
+const QUICKNET_HASH = '52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971'
 
 type InnerEnvelope = {
   v: 1
@@ -303,6 +307,7 @@ export class HedwigBridge {
       sentAt: string
     }>
     const outbox = this.readArray('hedwig-outbox')
+    const sent = this.readArray('hedwig-sent')
     for (const envelope of sealed) {
       try {
         const outer = JSON.parse(envelope) as OuterEnvelope
@@ -320,6 +325,7 @@ export class HedwigBridge {
       sealed,
       opened,
       outbox,
+      sent,
     })
   }
 
@@ -369,6 +375,57 @@ export class HedwigBridge {
     this.loadState()
   }
 
+  private saveSentItem(
+    id: string,
+    recipient: string,
+    subject: string,
+    body: string,
+    releaseRound: number,
+    sentAt: string,
+    status: 'pending' | 'sent' | 'failed',
+  ): void {
+    const sent = this.readArray('hedwig-sent') as Array<{
+      id: string
+      to: string
+      subject: string
+      body: string
+      releaseRound: number
+      sentAt: string
+      status: string
+    }>
+    const item = {
+      id,
+      to: recipient,
+      subject,
+      body,
+      releaseRound,
+      sentAt,
+      status,
+    }
+    localStorage.setItem(
+      'hedwig-sent',
+      JSON.stringify([item, ...sent.filter((entry) => entry.id !== id)].slice(0, 200)),
+    )
+  }
+
+  private updateSentStatus(id: string, status: 'pending' | 'sent' | 'failed'): void {
+    const sent = this.readArray('hedwig-sent') as Array<{
+      id: string
+      to: string
+      subject: string
+      body: string
+      releaseRound: number
+      sentAt: string
+      status: string
+    }>
+    localStorage.setItem(
+      'hedwig-sent',
+      JSON.stringify(sent.map((item) =>
+        item.id === id ? { ...item, status } : item,
+      )),
+    )
+  }
+
   private updateOutbox(id: string, status: 'pending' | 'sent' | 'failed', error = ''): void {
     const outbox = this.readArray('hedwig-outbox') as Array<{
       id: string
@@ -396,9 +453,13 @@ export class HedwigBridge {
     }
     if (!this.channel || this.channel.readyState !== 'open') {
       this.updateOutbox(id, 'failed', 'Connect to the peer before retrying')
+      this.updateSentStatus(id, 'failed')
+      this.loadState()
       return
     }
     this.updateOutbox(id, 'pending')
+    this.updateSentStatus(id, 'pending')
+    this.loadState()
     this.sendTransfer(item.envelope)
   }
 
@@ -494,6 +555,8 @@ export class HedwigBridge {
         if (payload.type === 'delivery-confirmation') {
           this.send('envelopeSent', { envelope: String(payload.envelopeId), confirmed: true, envelopeId: payload.envelopeId })
           this.updateOutbox(String(payload.envelopeId), 'sent')
+          this.updateSentStatus(String(payload.envelopeId), 'sent')
+          this.loadState()
           this.log(`Send confirmation received for ${payload.envelopeId}`)
           return
         }
@@ -636,8 +699,11 @@ export class HedwigBridge {
         Date.now()
         + Math.max(0, request.releaseSeconds ?? 0) * 1000
         + Math.max(0, request.releaseHours) * 60 * 60 * 1000
-      const client = mainnetClient()
+      const client = quicknetClient()
       const chain = await client.chain().info()
+      if (chain.hash !== QUICKNET_HASH) {
+        throw new Error('Unexpected drand chain')
+      }
       const releaseRound = roundForReleaseMs(releaseTime, chain)
 
       const box = sealBox(
@@ -679,6 +745,8 @@ export class HedwigBridge {
         subjectCt: '',
       }
 
+      const sentAt = inner.sentAt
+
       const plaintext = encodeUtf8(JSON.stringify(inner))
       const tlock = await timelockEncrypt(releaseRound, Buffer.from(plaintext), client)
       const outer: OuterEnvelope = {
@@ -690,8 +758,18 @@ export class HedwigBridge {
         tlock,
       }
       const serialized = JSON.stringify(outer)
+      this.saveSentItem(
+        id,
+        request.recipient.trim(),
+        request.subject.trim(),
+        request.body.trim(),
+        releaseRound,
+        sentAt,
+        'pending',
+      )
       if (!this.channel || this.channel.readyState !== 'open') {
         this.saveOutboxItem(id, request.subject.trim(), serialized, 'failed', 'Connect to the peer before sending')
+        this.updateSentStatus(id, 'failed')
         throw new Error('Connect to the peer before sending')
       }
       this.saveOutboxItem(id, request.subject.trim(), serialized, 'pending')
@@ -713,10 +791,23 @@ export class HedwigBridge {
       if (!recipient) throw new Error('Envelope recipient is invalid')
       if (outer.to !== this.identity.address) throw new Error('This letter belongs to another owl')
 
-      const client = mainnetClient()
+      const client = quicknetClient()
+      const chain = await client.chain().info()
+      if (chain.hash !== QUICKNET_HASH) {
+        throw new Error('Unexpected drand chain')
+      }
       const plaintext = await timelockDecrypt(outer.tlock, client)
       this.log(`TLock decryption succeeded for round ${outer.releaseRound}`)
       const inner = JSON.parse(decodeUtf8(plaintext)) as InnerEnvelope
+
+      if (
+        inner.v !== 1
+        || inner.id !== outer.envelopeId
+        || inner.to !== outer.to
+        || inner.releaseRound !== outer.releaseRound
+      ) {
+        throw new Error('Envelope fields do not match')
+      }
 
       const sender = parseAddress(inner.from)
       if (!sender) throw new Error('Sender address is invalid')
