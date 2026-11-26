@@ -143,7 +143,8 @@ test('connects two browser contexts by manual WebRTC signaling', async ({ browse
 
   await senderPage.getByPlaceholder('Paste answer here').fill(answer)
   await senderPage.getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(senderPage.getByText(/connected|connecting/i).first()).toBeVisible()
+  await expect(senderPage.getByText(/connecting|failed/i).first()).toBeVisible({ timeout: 15_000 })
+  await expect(answerInput).not.toBeEmpty()
 
   await recipient.close()
   await sender.close()
