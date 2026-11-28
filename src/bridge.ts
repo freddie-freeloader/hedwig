@@ -14,6 +14,7 @@ import {
   envelopeReplayKey,
   parseOuterEnvelope,
 } from './envelope.ts'
+import { presentConnectionStatus } from './connectionStatus.ts'
 
 type ElmApp = {
   ports: {
@@ -156,6 +157,7 @@ export class HedwigBridge {
   private readonly receivedEnvelopeIds = new Set<string>()
   private chunkSession: ChunkSession | null = null
   private iceCandidateCount = 0
+  private statusLabel = 'Disconnected'
 
   constructor(app: ElmApp) {
     this.app = app
@@ -276,8 +278,23 @@ export class HedwigBridge {
 
   private log(message: string): void {
     const time = new Date().toISOString().slice(11, 23)
-    console.debug(`[Hedwig] ${time} ${message}`)
+    console.debug(`[Rosemaries] ${time} ${message}`)
     this.send('debugLog', { time, message })
+  }
+
+  private postStatus(status: string, detail?: string): void {
+    if (status === 'new' && this.statusLabel !== 'Disconnected') {
+      if (detail !== undefined) {
+        this.send('connectionStatus', { status: this.statusLabel, detail })
+      }
+      return
+    }
+    const shown = presentConnectionStatus(status)
+    this.statusLabel = shown
+    this.send(
+      'connectionStatus',
+      detail === undefined ? { status: shown } : { status: shown, detail },
+    )
   }
 
   private error(message: string): void {
@@ -311,15 +328,22 @@ export class HedwigBridge {
           xPublic,
         }
         if (request.name?.trim()) this.persistIdentity()
-        this.send('identityLoaded', { address: stored.address, name: this.identity.name })
+        this.send('identityLoaded', { address: stored.address, name: this.identity.name, welcome: false })
         this.log(`Identity loaded: ${stored.address.slice(0, 12)}...`)
         return
       }
     }
 
+    const requestedName = request.name?.trim() ?? ''
+    if (!requestedName) {
+      this.send('identityLoaded', { address: '', name: '', welcome: true })
+      this.log('Waiting for a name before creating an identity')
+      return
+    }
+
     const ed = ed25519.keygen()
     const x = x25519.keygen()
-    const name = request.name?.trim() || 'My owl'
+    const name = requestedName
     const address = makeAddress(ed.publicKey, x.publicKey)
     this.identity = {
       name,
@@ -330,7 +354,7 @@ export class HedwigBridge {
       xPublic: x.publicKey,
     }
     this.persistIdentity()
-    this.send('identityLoaded', { address, name })
+    this.send('identityLoaded', { address, name, welcome: false })
     this.log(`New identity created: ${address.slice(0, 12)}...`)
   }
 
@@ -540,7 +564,7 @@ export class HedwigBridge {
       return
     }
     if (!this.channel || this.channel.readyState !== 'open') {
-      this.updateOutbox(id, 'failed', 'Connect to the peer before retrying')
+      this.updateOutbox(id, 'failed', 'Connect with your friend before sending.')
       this.updateSentStatus(id, 'failed')
       this.loadState()
       return
@@ -559,11 +583,15 @@ export class HedwigBridge {
   private saveContact(contact: Record<string, string>): void {
     const address = (contact.address ?? '').trim()
     if (!parseAddress(address)) {
-      this.error('Cannot save an invalid owl address')
+      this.error('That letter address does not look right.')
       return
     }
     const contacts = this.readArray('hedwig-contacts') as Array<{ name: string; address: string }>
-    const name = (contact.name ?? '').trim() || 'Recipient'
+    const name = (contact.name ?? '').trim()
+    if (!name) {
+      this.error('Give your friend a name.')
+      return
+    }
     const next = [
       { name, address },
       ...contacts.filter((item) => item.address !== address),
@@ -616,7 +644,7 @@ export class HedwigBridge {
         xPublic,
       }
       this.persistIdentity()
-      this.send('identityLoaded', { address: stored.address, name: stored.name })
+      this.send('identityLoaded', { address: stored.address, name: stored.name, welcome: false })
       this.loadState()
       this.log('Identity backup restored')
     } catch (caught) {
@@ -642,6 +670,7 @@ export class HedwigBridge {
 
   private resetConnection(): void {
     this.chunkSession = null
+    this.statusLabel = 'Disconnected'
     if (this.channel) {
       this.channel.close()
       this.channel = null
@@ -650,7 +679,7 @@ export class HedwigBridge {
       this.peer.close()
       this.peer = null
     }
-    this.send('connectionStatus', { status: 'disconnected' })
+    this.postStatus('Disconnected', '')
     this.log('Connection reset; old invitation and answer cleared')
   }
 
@@ -661,30 +690,30 @@ export class HedwigBridge {
       iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
     })
     peer.addEventListener('connectionstatechange', () => {
-      this.send('connectionStatus', { status: peer.connectionState })
+      this.postStatus(peer.connectionState)
       this.log(`Peer connection state: ${peer.connectionState}`)
-      if (peer.connectionState === 'failed') this.error('Peer connection failed')
+      if (peer.connectionState === 'failed') this.error('Could not connect')
     })
     peer.addEventListener('icecandidate', (event) => {
       if (event.candidate) {
         this.iceCandidateCount += 1
-        this.send('connectionStatus', {
-          status: peer.connectionState,
-          detail: `${this.iceCandidateCount} ICE candidates · gathering ${peer.iceGatheringState}`,
-        })
+        this.postStatus(
+          peer.connectionState,
+          `${this.iceCandidateCount} ICE candidates · gathering ${peer.iceGatheringState}`,
+        )
       }
     })
     peer.addEventListener('icegatheringstatechange', () => {
-      this.send('connectionStatus', {
-        status: peer.connectionState,
-        detail: `${this.iceCandidateCount} ICE candidates · gathering ${peer.iceGatheringState}`,
-      })
+      this.postStatus(
+        peer.connectionState,
+        `${this.iceCandidateCount} ICE candidates · gathering ${peer.iceGatheringState}`,
+      )
     })
     peer.addEventListener('iceconnectionstatechange', () => {
-      this.send('connectionStatus', {
-        status: peer.connectionState,
-        detail: `ICE ${peer.iceConnectionState} · ${this.iceCandidateCount} candidates`,
-      })
+      this.postStatus(
+        peer.connectionState,
+        `ICE ${peer.iceConnectionState} · ${this.iceCandidateCount} candidates`,
+      )
     })
     peer.addEventListener('datachannel', (event) => {
       this.attachChannel(event.channel)
@@ -696,11 +725,11 @@ export class HedwigBridge {
   private attachChannel(channel: RTCDataChannel): void {
     this.channel = channel
     channel.addEventListener('open', () => {
-      this.send('connectionStatus', { status: 'connected' })
+      this.postStatus('connected')
       this.log('WebRTC data channel opened')
     })
     channel.addEventListener('close', () => {
-      this.send('connectionStatus', { status: 'disconnected' })
+      this.postStatus('disconnected')
       this.log('WebRTC data channel closed')
     })
     channel.addEventListener('message', (event) => {
@@ -808,7 +837,7 @@ export class HedwigBridge {
       this.log(`ICE gathering complete (${peer.iceGatheringState})`)
       const envelope = createSignalingEnvelope('offer', peer.localDescription as RTCSessionDescriptionInit)
       this.send('offerCreated', { sdp: JSON.stringify(envelope) })
-      this.send('connectionStatus', { status: 'waiting-for-answer' })
+      this.postStatus('waiting-for-answer')
     } catch (caught) {
       this.error(caught instanceof Error ? caught.message : 'Could not create invitation')
     }
@@ -825,7 +854,7 @@ export class HedwigBridge {
       this.log(`ICE gathering complete (${peer.iceGatheringState})`)
       const envelope = createSignalingEnvelope('answer', peer.localDescription as RTCSessionDescriptionInit)
       this.send('answerCreated', { sdp: JSON.stringify(envelope) })
-      this.send('connectionStatus', { status: 'waiting-for-peer' })
+      this.postStatus('waiting-for-peer')
     } catch (caught) {
       this.error(caught instanceof Error ? caught.message : 'Could not accept invitation')
     }
@@ -836,7 +865,7 @@ export class HedwigBridge {
       const description = parseSignalingEnvelope(serialized, 'answer')
       await this.ensurePeer().setRemoteDescription(description)
       this.log('Remote answer applied')
-      this.send('connectionStatus', { status: 'connecting' })
+      this.postStatus('connecting')
     } catch (caught) {
       this.error(caught instanceof Error ? caught.message : 'Could not apply answer')
     }
@@ -852,9 +881,9 @@ export class HedwigBridge {
     try {
       if (!this.identity) throw new Error('Identity is not ready')
       const recipient = parseAddress(request.recipient)
-      if (!recipient) throw new Error('Recipient owl address is invalid')
-      if (!request.subject.trim()) throw new Error('Subject is required')
-      if (!request.body.trim()) throw new Error('Letter text is required')
+      if (!recipient) throw new Error('That letter address does not look right.')
+      if (!request.subject.trim()) throw new Error('Give the letter a subject.')
+      if (!request.body.trim()) throw new Error('Write a few lines before sealing.')
 
       const releaseTime =
         Date.now()
@@ -929,9 +958,9 @@ export class HedwigBridge {
         'pending',
       )
       if (!this.channel || this.channel.readyState !== 'open') {
-        this.saveOutboxItem(id, request.subject.trim(), request.recipient.trim(), serialized, 'failed', 'Connect to the peer before sending')
+        this.saveOutboxItem(id, request.subject.trim(), request.recipient.trim(), serialized, 'failed', 'Connect with your friend before sending.')
         this.updateSentStatus(id, 'failed')
-        throw new Error('Connect to the peer before sending')
+        throw new Error('Connect with your friend before sending.')
       }
       this.saveOutboxItem(id, request.subject.trim(), request.recipient.trim(), serialized, 'pending')
       this.log(`Sending envelope ${id}: ${request.subject.trim()} (release round ${releaseRound})`)
@@ -950,7 +979,7 @@ export class HedwigBridge {
       this.log(`Opening envelope ${outer.envelopeId ?? "unknown"} (round ${outer.releaseRound})`)
       const recipient = parseAddress(outer.to)
       if (!recipient) throw new Error('Envelope recipient is invalid')
-      if (outer.to !== this.identity.address) throw new Error('This letter belongs to another owl')
+      if (outer.to !== this.identity.address) throw new Error('This letter is addressed to someone else.')
 
       const client = quicknetClient()
       const chain = await client.chain().info()
@@ -962,7 +991,7 @@ export class HedwigBridge {
       const inner = JSON.parse(decodeUtf8(plaintext)) as InnerEnvelope
       const pair = classifyEnvelopePair(outer, inner, this.identity.address)
       if (!pair.ok) {
-        if (pair.reason === 'wrong-recipient') throw new Error('This letter belongs to another owl')
+        if (pair.reason === 'wrong-recipient') throw new Error('This letter is addressed to someone else.')
         if (pair.reason === 'wrong-envelope') throw new Error('Envelope fields do not match')
         throw new Error('Envelope fields are invalid')
       }
@@ -1030,7 +1059,7 @@ export class HedwigBridge {
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : 'Could not open letter'
       if (/round|future|not yet|chain/i.test(message)) {
-        this.error('This letter is still sealed until its drand round')
+        this.error('This letter is still sealed. It opens on its day.')
       } else {
         this.error(message)
       }
