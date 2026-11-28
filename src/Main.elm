@@ -1,14 +1,18 @@
 port module Main exposing (main)
 
 import Browser
-import Html exposing (Html, button, div, h1, h2, h3, header, input, label, p, span, summary, details, textarea, text)
-import Html.Attributes exposing (class, placeholder, rows, type_, value)
-import Html.Events exposing (onClick, onInput)
+import Html exposing (Html, button, details, div, form, h1, h2, header, input, label, nav, p, span, summary, text, textarea)
+import Html.Attributes exposing (attribute, class, disabled, for, hidden, id, placeholder, readonly, rows, type_, value)
+import Html.Events exposing (onClick, onInput, onSubmit)
 import Json.Decode as D
 import Json.Encode as E
+import Task
+import Time
 
 
 port themeChanged : String -> Cmd msg
+port navigateHash : String -> Cmd msg
+port hashChanged : (String -> msg) -> Sub msg
 port initializeIdentity : E.Value -> Cmd msg
 port identityLoaded : (E.Value -> msg) -> Sub msg
 port createOffer : () -> Cmd msg
@@ -49,6 +53,9 @@ port outboxUpdated : (E.Value -> msg) -> Sub msg
 type alias Flags =
     { location : String
     , theme : String
+    , now : Int
+    , tzOffset : Int
+    , tzEras : List { start : Int, offset : Int }
     }
 
 
@@ -59,6 +66,14 @@ type alias Letter =
     , body : String
     , releaseRound : Int
     , sentAt : String
+    , receivedAt : String
+    }
+
+
+type alias SealedLetter =
+    { raw : String
+    , from : String
+    , releaseRound : Int
     , receivedAt : String
     }
 
@@ -87,39 +102,6 @@ type alias OutboxItem =
     }
 
 
-type alias Model =
-    { location : String
-    , page : Page
-    , theme : String
-    , name : String
-    , address : String
-    , recipient : String
-    , subject : String
-    , body : String
-    , releaseHours : String
-    , releaseSeconds : String
-    , invitation : String
-    , answer : String
-    , connectionStatus : String
-    , iceDetails : String
-    , notice : String
-    , sentEnvelope : String
-    , inbox : List Letter
-    , draftEnvelope : String
-    , debugLogs : List String
-    , contacts : List Contact
-    , drafts : List Draft
-    , sealedEnvelopes : List String
-    , identityBackup : String
-    , importBackup : String
-    , outbox : List OutboxItem
-    , sent : List SentLetter
-    , archivedOutbox : List OutboxItem
-    , archivedSent : List SentLetter
-    , confirmation : Maybe String
-    }
-
-
 type alias Contact =
     { name : String
     , address : String
@@ -132,12 +114,44 @@ type alias Draft =
     , body : String
     , releaseHours : String
     , releaseSeconds : String
+    , releaseChoice : String
     }
+
+
+type alias Notice =
+    { text : String
+    , tone : NoticeTone
+    }
+
+
+type NoticeTone
+    = Success
+    | Error
+    | Info
+
+
+type alias Problems =
+    { recipient : String
+    , subject : String
+    , body : String
+    }
+
+
+type alias Delay =
+    { hours : Float
+    , seconds : Float
+    }
+
+
+type Phase
+    = Booting
+    | Welcome
+    | Ready
 
 
 type Page
     = Desk
-    | Owl
+    | Pair
     | Compose
     | Inbox
     | Outbox
@@ -145,67 +159,129 @@ type Page
     | Help
 
 
+type PairMode
+    = Invite
+    | Join
+
+
+type ReleaseChoice
+    = TomorrowMorning
+    | FewDays
+    | NextWeek
+    | CustomDay String
+    | TestSecond
+
+
+type alias Model =
+    { location : String
+    , page : Page
+    , phase : Phase
+    , theme : String
+    , dev : Bool
+    , zone : Time.Zone
+    , now : Time.Posix
+    , name : String
+    , address : String
+    , submitting : Bool
+    , nameError : String
+    , pairMode : PairMode
+    , createdInvitation : String
+    , pastedInvitation : String
+    , createdAnswer : String
+    , pastedAnswer : String
+    , pairInviteError : String
+    , pairAnswerError : String
+    , connectionStatus : String
+    , iceDetails : String
+    , showDetails : Bool
+    , moreOpen : Bool
+    , copied : String
+    , notice : Maybe Notice
+    , friendName : String
+    , contactError : String
+    , recipient : String
+    , subject : String
+    , body : String
+    , releaseChoice : ReleaseChoice
+    , composeTried : Bool
+    , openDateError : String
+    , inbox : List Letter
+    , sealed : List SealedLetter
+    , openingKey : String
+    , contacts : List Contact
+    , drafts : List Draft
+    , identityBackup : String
+    , importBackup : String
+    , outbox : List OutboxItem
+    , sent : List SentLetter
+    , archivedOutbox : List OutboxItem
+    , archivedSent : List SentLetter
+    , confirmation : Maybe String
+    , debugLogs : List String
+    }
+
+
 type Msg
     = ToggleTheme
-    | ShowDesk
-    | ShowOwl
-    | ShowCompose
-    | ShowInbox
-    | ShowOutbox
-    | ShowSent
-    | ShowHelp
+    | Go Page
+    | HashChanged String
+    | GotNow Time.Posix
+    | DismissNotice
+    | ToggleDetails
+    | ToggleMore
+    | SubmitWelcome
+    | NameChanged String
+    | SaveIdentity
+    | IdentityResult D.Value
     | CopyAddress
     | CopyInvitation
     | CopyAnswer
     | CopyBackup
-    | NameChanged String
-    | SaveIdentity
-    | IdentityResult D.Value
-    | RecipientChanged String
-    | SubjectChanged String
-    | BodyChanged String
-    | ReleaseHoursChanged String
-    | ReleaseSecondsChanged String
-    | InvitationChanged String
-    | AnswerChanged String
+    | SetPairMode PairMode
+    | PastedInvitationChanged String
+    | PastedAnswerChanged String
     | CreateOffer
     | OfferResult D.Value
     | AcceptOffer
     | AnswerResult D.Value
     | SetRemoteAnswer
     | ConnectionResult D.Value
+    | ResetConnection
+    | FriendNameChanged String
+    | RecipientChanged String
+    | SubjectChanged String
+    | BodyChanged String
+    | ChooseRelease ReleaseChoice
+    | CustomDateChanged String
     | PrepareEnvelope
+    | SendPrepared Time.Posix
     | EnvelopeSentResult D.Value
     | EnvelopeReceivedResult D.Value
-    | DecryptLetter String
+    | OpenSealed String
     | LetterDecryptedResult D.Value
     | BridgeErrorResult D.Value
     | DebugLogResult D.Value
     | ClearDebugLog
     | RetryEnvelope String
+    | SaveDraft
+    | AddRecipientContact
+    | SelectContact String
     | StateLoadedResult D.Value
     | ExportIdentity
     | IdentityExportedResult D.Value
     | ImportIdentityChanged String
-    | ImportIdentity
-    | DownloadIdentity
+    | RequestIdentityRestore
     | ImportIdentityFile
     | IdentityFileLoadedResult D.Value
-    | ArchiveOutbox
-    | ArchiveSent
-    | RestoreOutbox String
-    | DeleteArchivedOutbox String
-    | RestoreSent String
-    | DeleteArchivedSent String
-    | RequestIdentityRestore
     | RequestOutboxArchive
     | RequestSentArchive
     | CancelConfirmation
     | ConfirmAction
-    | ResetConnection
-    | SaveDraft
-    | AddRecipientContact
-    | SelectRecipient String
+    | DownloadIdentity
+    | RestoreOutbox String
+    | DeleteArchivedOutbox String
+    | RestoreSent String
+    | DeleteArchivedSent String
 
 
 main : Program Flags Model Msg
@@ -221,34 +297,42 @@ main =
 init : Flags -> ( Model, Cmd Msg )
 init flags =
     ( { location = flags.location
-      , page =
-            if String.contains "#help" flags.location then Help
-            else if String.contains "#outbox" flags.location then Outbox
-            else if String.contains "#sent" flags.location then Sent
-            else if String.contains "#compose" flags.location then Compose
-            else if String.contains "#inbox" flags.location then Inbox
-            else if String.contains "#owl" flags.location then Owl
-            else Desk
+      , page = pageFromHash flags.location
+      , phase = Booting
       , theme = if flags.theme == "light" then "light" else "dark"
+      , dev = String.contains "dev=1" flags.location
+      , zone = Time.customZone flags.tzOffset (List.reverse (List.sortBy .start flags.tzEras))
+      , now = Time.millisToPosix flags.now
       , name = ""
       , address = ""
+      , submitting = False
+      , nameError = ""
+      , pairMode = Invite
+      , createdInvitation = ""
+      , pastedInvitation = ""
+      , createdAnswer = ""
+      , pastedAnswer = ""
+      , pairInviteError = ""
+      , pairAnswerError = ""
+      , connectionStatus = "Disconnected"
+      , iceDetails = ""
+      , showDetails = False
+      , moreOpen = False
+      , copied = ""
+      , notice = Nothing
+      , friendName = ""
+      , contactError = ""
       , recipient = ""
       , subject = ""
       , body = ""
-      , releaseHours = "24"
-      , releaseSeconds = "0"
-      , invitation = ""
-      , answer = ""
-      , connectionStatus = "Disconnected"
-      , iceDetails = ""
-      , notice = ""
-      , sentEnvelope = ""
+      , releaseChoice = TomorrowMorning
+      , composeTried = False
+      , openDateError = ""
       , inbox = []
-      , draftEnvelope = ""
-      , debugLogs = []
+      , sealed = []
+      , openingKey = ""
       , contacts = []
       , drafts = []
-      , sealedEnvelopes = []
       , identityBackup = ""
       , importBackup = ""
       , outbox = []
@@ -256,15 +340,20 @@ init flags =
       , archivedOutbox = []
       , archivedSent = []
       , confirmation = Nothing
+      , debugLogs = []
       }
-    , initializeIdentity (E.object [ ( "name", E.string "" ) ])
+    , Cmd.batch
+        [ initializeIdentity (E.object [ ( "name", E.string "" ) ])
+        , Task.perform GotNow Time.now
+        ]
     )
 
 
 subscriptions : Model -> Sub Msg
 subscriptions _ =
     Sub.batch
-        [ identityLoaded IdentityResult
+        [ Time.every 10000 GotNow
+        , identityLoaded IdentityResult
         , offerCreated OfferResult
         , answerCreated AnswerResult
         , connectionStatus ConnectionResult
@@ -277,6 +366,7 @@ subscriptions _ =
         , identityExported IdentityExportedResult
         , outboxUpdated StateLoadedResult
         , identityFileLoaded IdentityFileLoadedResult
+        , hashChanged HashChanged
         ]
 
 
@@ -286,65 +376,229 @@ update msg model =
         ToggleTheme ->
             let
                 nextTheme =
-                    if model.theme == "dark" then "light" else "dark"
+                    if model.theme == "dark" then
+                        "light"
+                    else
+                        "dark"
             in
             ( { model | theme = nextTheme }, themeChanged nextTheme )
 
-        ShowDesk ->
-            ( { model | page = Desk }, Cmd.none )
-
-        ShowOwl ->
-            ( { model | page = Owl }, Cmd.none )
-
-        ShowCompose ->
-            ( { model | page = Compose }, Cmd.none )
-
-        ShowInbox ->
-            ( { model | page = Inbox }, Cmd.none )
-
-        ShowOutbox ->
-            ( { model | page = Outbox }, Cmd.none )
-
-        ShowSent ->
-            ( { model | page = Sent }, Cmd.none )
-
-        ShowHelp ->
-            ( { model | page = Help }, Cmd.none )
-
-        CopyAddress ->
-            ( { model | notice = "Owl address copied" }, copyText model.address )
-
-        CopyInvitation ->
-            ( { model | notice = "Invitation copied" }, copyText model.invitation )
-
-        CopyAnswer ->
-            ( { model | notice = "Answer copied" }, copyText model.answer )
-
-        CopyBackup ->
-            ( { model | notice = "Identity backup copied" }, copyText model.identityBackup )
-
-        NameChanged value ->
-            ( { model | name = value }, Cmd.none )
-
-        SaveIdentity ->
-            ( model
-            , initializeIdentity (E.object [ ( "name", E.string model.name ) ])
+        Go page ->
+            ( { model | page = page, moreOpen = False }
+            , Cmd.batch
+                [ if model.phase == Ready then
+                    navigateHash (hashFor page)
+                  else
+                    Cmd.none
+                , Task.perform GotNow Time.now
+                ]
             )
 
-        IdentityResult value ->
+        HashChanged hash ->
+            if model.phase /= Ready then
+                ( model, Cmd.none )
+            else
+                ( { model | page = pageFromHash hash }, Cmd.none )
+
+        GotNow now ->
+            ( { model | now = now }, Cmd.none )
+
+        DismissNotice ->
+            ( { model | notice = Nothing }, Cmd.none )
+
+        ToggleDetails ->
+            ( { model | showDetails = not model.showDetails }, Cmd.none )
+
+        ToggleMore ->
+            ( { model | moreOpen = not model.moreOpen }, Cmd.none )
+
+        SubmitWelcome ->
             let
-                decoder =
-                    D.map2 Tuple.pair
+                trimmed =
+                    String.trim model.name
+            in
+            if trimmed == "" then
+                ( { model | nameError = "Tell your friend what to call you." }, Cmd.none )
+            else
+                ( { model | name = trimmed, nameError = "", submitting = True }
+                , initializeIdentity (E.object [ ( "name", E.string trimmed ) ])
+                )
+
+        NameChanged value ->
+            ( { model | name = value, nameError = "" }, Cmd.none )
+
+        SaveIdentity ->
+            let
+                trimmed =
+                    String.trim model.name
+            in
+            if trimmed == "" then
+                ( { model | nameError = "Tell your friend what to call you." }, Cmd.none )
+            else
+                ( { model | name = trimmed, nameError = "", notice = Just (Notice "Name saved" Success) }
+                , initializeIdentity (E.object [ ( "name", E.string trimmed ) ])
+                )
+
+        IdentityResult value ->
+            case
+                D.decodeValue
+                    (D.map3 (\address name needsWelcome -> ( address, name, needsWelcome ))
                         (D.field "address" D.string)
                         (D.field "name" D.string)
-            in
-            case D.decodeValue decoder value of
-                Ok ( address, name ) ->
-                    ( { model | address = address, name = name, notice = "Identity ready" }
+                        (D.oneOf [ D.field "welcome" D.bool, D.succeed False ])
+                    )
+                    value
+            of
+                Ok ( _, _, True ) ->
+                    ( { model | phase = Welcome, submitting = False }, Cmd.none )
+
+                Ok ( "", _, _ ) ->
+                    ( { model | phase = Welcome, submitting = False }, Cmd.none )
+
+                Ok ( address, name, _ ) ->
+                    ( { model
+                        | phase = Ready
+                        , submitting = False
+                        , address = address
+                        , name = name
+                        , nameError = ""
+                      }
                     , Cmd.none
                     )
+
+                Err _ ->
+                    ( { model
+                        | phase =
+                            if model.phase == Booting then
+                                Welcome
+                            else
+                                model.phase
+                        , submitting = False
+                      }
+                    , Cmd.none
+                    )
+
+        CopyAddress ->
+            ( { model | copied = "address", notice = Just (Notice "Letter address copied" Success) }
+            , copyText model.address
+            )
+
+        CopyInvitation ->
+            if model.createdInvitation == "" then
+                ( model, Cmd.none )
+            else
+                ( { model | copied = "invitation", notice = Just (Notice "Invitation copied" Success) }
+                , copyText model.createdInvitation
+                )
+
+        CopyAnswer ->
+            if model.createdAnswer == "" then
+                ( model, Cmd.none )
+            else
+                ( { model | copied = "answer", notice = Just (Notice "Answer copied" Success) }
+                , copyText model.createdAnswer
+                )
+
+        CopyBackup ->
+            ( { model | copied = "backup", notice = Just (Notice "Backup copied" Success) }
+            , copyText model.identityBackup
+            )
+
+        SetPairMode mode ->
+            ( { model | pairMode = mode }, Cmd.none )
+
+        PastedInvitationChanged value ->
+            ( { model | pastedInvitation = value, pairInviteError = "" }, Cmd.none )
+
+        PastedAnswerChanged value ->
+            ( { model | pastedAnswer = value, pairAnswerError = "" }, Cmd.none )
+
+        CreateOffer ->
+            ( model, createOffer () )
+
+        OfferResult value ->
+            case D.decodeValue (D.field "sdp" D.string) value of
+                Ok sdp ->
+                    ( { model
+                        | createdInvitation = sdp
+                        , connectionStatus = "Waiting for your friend…"
+                        , copied = ""
+                      }
+                    , Cmd.none
+                    )
+
                 Err _ ->
                     ( model, Cmd.none )
+
+        AcceptOffer ->
+            if String.trim model.pastedInvitation == "" then
+                ( { model | pairInviteError = "Paste your friend's invitation first." }, Cmd.none )
+            else
+                ( { model | pairInviteError = "" }
+                , acceptOffer (String.trim model.pastedInvitation)
+                )
+
+        AnswerResult value ->
+            case D.decodeValue (D.field "sdp" D.string) value of
+                Ok sdp ->
+                    ( { model
+                        | createdAnswer = sdp
+                        , connectionStatus = "Waiting for your friend…"
+                        , copied = ""
+                      }
+                    , Cmd.none
+                    )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
+        SetRemoteAnswer ->
+            if String.trim model.pastedAnswer == "" then
+                ( { model | pairAnswerError = "Paste your friend's answer first." }, Cmd.none )
+            else
+                ( { model | pairAnswerError = "" }
+                , setRemoteAnswer (String.trim model.pastedAnswer)
+                )
+
+        ConnectionResult value ->
+            case
+                D.decodeValue
+                    (D.map2 Tuple.pair
+                        (D.field "status" D.string)
+                        (D.oneOf [ D.field "detail" D.string, D.succeed "" ])
+                    )
+                    value
+            of
+                Ok ( status, detail ) ->
+                    ( { model
+                        | connectionStatus = normalizeStatus model.connectionStatus status
+                        , iceDetails =
+                            if detail == "" then
+                                model.iceDetails
+                            else
+                                detail
+                      }
+                    , Cmd.none
+                    )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
+        ResetConnection ->
+            ( { model
+                | createdInvitation = ""
+                , pastedInvitation = ""
+                , createdAnswer = ""
+                , pastedAnswer = ""
+                , connectionStatus = "Disconnected"
+                , iceDetails = ""
+                , notice = Just (Notice "Connection reset" Info)
+              }
+            , resetConnection ()
+            )
+
+        FriendNameChanged value ->
+            ( { model | friendName = value, contactError = "" }, Cmd.none )
 
         RecipientChanged value ->
             ( { model | recipient = value }, Cmd.none )
@@ -355,169 +609,112 @@ update msg model =
         BodyChanged value ->
             ( { model | body = value }, Cmd.none )
 
-        ReleaseHoursChanged value ->
-            ( { model | releaseHours = value, releaseSeconds = "0" }, Cmd.none )
+        ChooseRelease choice ->
+            ( { model | releaseChoice = choice, openDateError = "" }, Cmd.none )
 
-        ReleaseSecondsChanged value ->
-            ( { model | releaseHours = "0", releaseSeconds = value }, Cmd.none )
-
-        InvitationChanged value ->
-            ( { model | invitation = value }, Cmd.none )
-
-        AnswerChanged value ->
-            ( { model | answer = value }, Cmd.none )
-
-        CreateOffer ->
-            ( model, createOffer () )
-
-        OfferResult value ->
-            case D.decodeValue (D.field "sdp" D.string) value of
-                Ok sdp ->
-                    ( { model | invitation = sdp, connectionStatus = "Invitation ready" }, Cmd.none )
-                Err _ ->
-                    ( model, Cmd.none )
-
-        AcceptOffer ->
-            ( model, acceptOffer model.invitation )
-
-        AnswerResult value ->
-            case D.decodeValue (D.field "sdp" D.string) value of
-                Ok sdp ->
-                    ( { model | answer = sdp, connectionStatus = "Answer ready" }, Cmd.none )
-                Err _ ->
-                    ( model, Cmd.none )
-
-        SetRemoteAnswer ->
-            ( model, setRemoteAnswer model.answer )
-
-        ConnectionResult value ->
-            let
-                decoder =
-                    D.map2 Tuple.pair
-                        (D.field "status" D.string)
-                        (D.oneOf
-                            [ D.field "detail" D.string
-                            , D.succeed ""
-                            ]
-                        )
-            in
-            case D.decodeValue decoder value of
-                Ok ( status, detail ) ->
-                    ( { model | connectionStatus = status, iceDetails = detail }, Cmd.none )
-                Err _ ->
-                    ( model, Cmd.none )
+        CustomDateChanged value ->
+            ( { model | releaseChoice = CustomDay value, openDateError = "" }, Cmd.none )
 
         PrepareEnvelope ->
             let
-                releaseHours =
-                    model.releaseHours
-                        |> String.toFloat
-                        |> Maybe.withDefault 24
-                        |> max 0
-                releaseSeconds =
-                    model.releaseSeconds
-                        |> String.toFloat
-                        |> Maybe.withDefault 0
-                        |> max 0
+                found =
+                    problems model
             in
-            ( { model | notice = "Preparing TLock envelope..." }
-            , prepareEnvelope
-                (E.object
-                    [ ( "recipient", E.string model.recipient )
-                    , ( "subject", E.string model.subject )
-                    , ( "body", E.string model.body )
-                    , ( "releaseHours", E.float releaseHours )
-                    , ( "releaseSeconds", E.float releaseSeconds )
-                    ]
-                )
-            )
+            if hasProblems found then
+                ( { model | composeTried = True }, Cmd.none )
+            else
+                ( { model | composeTried = True }, Task.perform SendPrepared Time.now )
 
-        EnvelopeSentResult value ->
-            case D.decodeValue
-                (D.map2 Tuple.pair
-                    (D.field "envelope" D.string)
-                    (D.maybe (D.field "confirmed" D.bool))
-                )
-                value
-            of
-                Ok ( envelope, confirmed ) ->
-                    ( { model
-                        | sentEnvelope = envelope
-                        , notice =
-                            if confirmed == Just True then
-                                "Send confirmed: peer received the letter"
-                            else
-                                "Envelope handed to the peer connection"
-                      }
-                    , Cmd.none
-                    )
-                Err _ ->
-                    ( model, Cmd.none )
+        SendPrepared now ->
+            case releaseDelay model.zone now (effectiveChoice model) of
+                Err message ->
+                    ( { model | now = now, openDateError = message }, Cmd.none )
 
-        EnvelopeReceivedResult value ->
-            let
-                envelopeDecoder =
-                    D.map2 Tuple.pair
-                        (D.field "envelope" D.string)
-                        (D.field "releaseRound" D.int)
-            in
-            case D.decodeValue envelopeDecoder value of
-                Ok ( envelope, releaseRound ) ->
-                    ( { model
-                        | draftEnvelope = envelope
-                        , notice = "Envelope received; release round " ++ String.fromInt releaseRound
-                      }
-                    , Cmd.none
-                    )
-                Err _ ->
-                    ( model, Cmd.none )
-
-        DecryptLetter envelope ->
-            ( model, decryptEnvelope envelope )
-
-        LetterDecryptedResult value ->
-            let
-                letterDecoder =
-                    D.map7 Letter
-                        (D.field "id" D.string)
-                        (D.field "from" D.string)
-                        (D.field "subject" D.string)
-                        (D.field "body" D.string)
-                        (D.field "releaseRound" D.int)
-                        (D.field "sentAt" D.string)
-                        (D.oneOf
-                            [ D.field "receivedAt" D.string
-                            , D.succeed ""
+                Ok delay ->
+                    ( { model | now = now, openDateError = "", notice = Just (Notice "Sealing your letter…" Info) }
+                    , prepareEnvelope
+                        (E.object
+                            [ ( "recipient", E.string (String.trim model.recipient) )
+                            , ( "subject", E.string (String.trim model.subject) )
+                            , ( "body", E.string model.body )
+                            , ( "releaseHours", E.float delay.hours )
+                            , ( "releaseSeconds", E.float delay.seconds )
                             ]
                         )
-            in
-            case D.decodeValue letterDecoder value of
-                Ok letter ->
-                    ( { model | inbox = letter :: model.inbox, draftEnvelope = "", notice = "Letter opened" }
+                    )
+
+        EnvelopeSentResult value ->
+            case
+                D.decodeValue
+                    (D.map2 Tuple.pair
+                        (D.field "envelope" D.string)
+                        (D.maybe (D.field "confirmed" D.bool))
+                    )
+                    value
+            of
+                Ok ( _, confirmed ) ->
+                    ( { model
+                        | notice =
+                            Just
+                                (Notice
+                                    (if confirmed == Just True then
+                                        "Your friend has the letter."
+                                     else
+                                        "The letter is crossing over."
+                                    )
+                                    Success
+                                )
+                      }
                     , Cmd.none
                     )
+
                 Err _ ->
                     ( model, Cmd.none )
+
+        EnvelopeReceivedResult _ ->
+            ( { model | notice = Just (Notice "A letter arrived. It will open on its day." Success) }
+            , Cmd.none
+            )
+
+        OpenSealed raw ->
+            ( { model | openingKey = raw }, decryptEnvelope raw )
+
+        LetterDecryptedResult value ->
+            case D.decodeValue letterDecoder value of
+                Ok letter ->
+                    ( { model
+                        | inbox = letter :: model.inbox
+                        , openingKey = ""
+                        , notice = Just (Notice "The letter is open." Success)
+                      }
+                    , Cmd.none
+                    )
+
+                Err _ ->
+                    ( { model | openingKey = "" }, Cmd.none )
 
         BridgeErrorResult value ->
             case D.decodeValue (D.field "message" D.string) value of
                 Ok message ->
-                    ( { model | notice = message }, Cmd.none )
+                    ( { model | notice = Just (Notice message Error), openingKey = "" }, Cmd.none )
+
                 Err _ ->
                     ( model, Cmd.none )
 
         DebugLogResult value ->
-            case D.decodeValue
-                (D.map2 Tuple.pair
-                    (D.field "time" D.string)
-                    (D.field "message" D.string)
-                )
-                value
+            case
+                D.decodeValue
+                    (D.map2 Tuple.pair
+                        (D.field "time" D.string)
+                        (D.field "message" D.string)
+                    )
+                    value
             of
                 Ok ( time, message ) ->
                     ( { model | debugLogs = (time ++ "  " ++ message) :: model.debugLogs |> List.take 50 }
                     , Cmd.none
                     )
+
                 Err _ ->
                     ( model, Cmd.none )
 
@@ -528,30 +725,51 @@ update msg model =
             ( model, retryEnvelope envelopeId )
 
         SaveDraft ->
-            ( model
-            , saveDraft
-                (E.object
-                    [ ( "recipient", E.string model.recipient )
-                    , ( "subject", E.string model.subject )
-                    , ( "body", E.string model.body )
-                    , ( "releaseHours", E.string model.releaseHours )
-                    , ( "releaseSeconds", E.string model.releaseSeconds )
-                    ]
+            if String.trim model.subject == "" && String.trim model.body == "" && String.trim model.recipient == "" then
+                ( { model | notice = Just (Notice "Write a little before saving." Info) }, Cmd.none )
+            else
+                let
+                    choice =
+                        effectiveChoice model
+                in
+                ( { model | notice = Just (Notice "Saved" Success) }
+                , saveDraft
+                    (E.object
+                        [ ( "recipient", E.string model.recipient )
+                        , ( "subject", E.string model.subject )
+                        , ( "body", E.string model.body )
+                        , ( "releaseHours", E.string (choiceHours choice) )
+                        , ( "releaseSeconds", E.string (choiceSeconds choice) )
+                        , ( "releaseChoice", E.string (choiceKey choice) )
+                        ]
+                    )
                 )
-            )
 
         AddRecipientContact ->
-            ( model
-            , saveContact
-                (E.object
-                    [ ( "name", E.string "Recipient" )
-                    , ( "address", E.string model.recipient )
-                    ]
+            if String.trim model.friendName == "" then
+                ( { model | contactError = "Give your friend a name." }, Cmd.none )
+            else if not (looseAddress (String.trim model.recipient)) then
+                ( { model | contactError = "That letter address does not look right." }, Cmd.none )
+            else
+                ( { model
+                    | contactError = ""
+                    , notice = Just (Notice ("Saved " ++ String.trim model.friendName ++ " to your contacts.") Success)
+                  }
+                , saveContact
+                    (E.object
+                        [ ( "name", E.string (String.trim model.friendName) )
+                        , ( "address", E.string (String.trim model.recipient) )
+                        ]
+                    )
                 )
-            )
 
-        SelectRecipient address ->
-            ( { model | recipient = address }, Cmd.none )
+        SelectContact address ->
+            ( { model
+                | recipient = address
+                , friendName = namedContact model.contacts address |> Maybe.withDefault model.friendName
+              }
+            , Cmd.none
+            )
 
         ExportIdentity ->
             ( model, exportIdentity () )
@@ -559,21 +777,21 @@ update msg model =
         IdentityExportedResult value ->
             case D.decodeValue (D.field "backup" D.string) value of
                 Ok backup ->
-                    ( { model | identityBackup = backup, notice = "Identity backup ready" }, Cmd.none )
+                    ( { model | identityBackup = backup, notice = Just (Notice "Your backup is ready" Success) }
+                    , Cmd.none
+                    )
+
                 Err _ ->
                     ( model, Cmd.none )
 
         ImportIdentityChanged value ->
             ( { model | importBackup = value }, Cmd.none )
 
-        ImportIdentity ->
+        RequestIdentityRestore ->
             if model.importBackup == "" then
-                ( { model | notice = "Paste an identity backup first" }, Cmd.none )
+                ( { model | notice = Just (Notice "Paste a backup first." Info) }, Cmd.none )
             else
                 ( { model | confirmation = Just "restore-identity" }, Cmd.none )
-
-        RequestIdentityRestore ->
-            ( { model | confirmation = Just "restore-identity" }, Cmd.none )
 
         RequestOutboxArchive ->
             ( { model | confirmation = Just "archive-outbox" }, Cmd.none )
@@ -607,17 +825,15 @@ update msg model =
         IdentityFileLoadedResult value ->
             case D.decodeValue (D.field "backup" D.string) value of
                 Ok backup ->
-                    ( { model | importBackup = backup, notice = "Identity file loaded; restore it only if it belongs to this owl" }
+                    ( { model
+                        | importBackup = backup
+                        , notice = Just (Notice "Backup file loaded. Restore it only if it belongs to this desk." Info)
+                      }
                     , Cmd.none
                     )
+
                 Err _ ->
-                    ( { model | notice = "Identity file could not be read" }, Cmd.none )
-
-        ArchiveOutbox ->
-            ( model, archiveOutbox () )
-
-        ArchiveSent ->
-            ( model, archiveSent () )
+                    ( { model | notice = Just (Notice "That backup file could not be read." Error) }, Cmd.none )
 
         RestoreOutbox id ->
             ( model, restoreOutbox id )
@@ -631,821 +847,1744 @@ update msg model =
         DeleteArchivedSent id ->
             ( model, deleteArchivedSent id )
 
-        ResetConnection ->
-            ( { model
-                | invitation = ""
-                , answer = ""
-                , connectionStatus = "Disconnected"
-                , notice = "Connection reset"
-              }
-            , resetConnection ()
-            )
-
         StateLoadedResult value ->
-            let
-                contactDecoder =
-                    D.map2 Contact
-                        (D.field "name" D.string)
-                        (D.field "address" D.string)
-                draftDecoder =
-                    D.map5 Draft
-                        (D.field "recipient" D.string)
-                        (D.field "subject" D.string)
-                        (D.field "body" D.string)
-                        (D.field "releaseHours" D.string)
-                        (D.field "releaseSeconds" D.string)
-                outboxDecoder =
-                    D.map8 OutboxItem
-                        (D.field "id" D.string)
-                        (D.field "subject" D.string)
-                        (D.oneOf [ D.field "recipient" D.string, D.succeed "" ])
-                        (D.oneOf [ D.field "recipientName" D.string, D.succeed "" ])
-                        (D.field "status" D.string)
-                        (D.field "envelope" D.string)
-                        (D.field "createdAt" D.string)
-                        (D.field "error" D.string)
-                sentDecoder =
-                    D.map8 SentLetter
-                        (D.field "id" D.string)
-                        (D.field "to" D.string)
-                        (D.field "subject" D.string)
-                        (D.field "body" D.string)
-                        (D.field "releaseRound" D.int)
-                        (D.field "sentAt" D.string)
-                        (D.field "status" D.string)
-                        (D.oneOf
-                            [ D.field "sentAtLocal" D.string
-                            , D.succeed ""
-                            ]
-                        )
-                decoder =
-                    D.map8
-                        (\contacts drafts sealed inbox outbox sent archivedOutbox archivedSent ->
-                            { contacts = contacts
-                            , drafts = drafts
-                            , sealed = sealed
-                            , inbox = inbox
-                            , outbox = outbox
-                            , sent = sent
-                            , archivedOutbox = archivedOutbox
-                            , archivedSent = archivedSent
-                            })
-                        (D.field "contacts" (D.list contactDecoder))
-                        (D.field "drafts" (D.list draftDecoder))
-                        (D.field "sealed" (D.list D.string))
-                        (D.field "opened"
-                            (D.list
-                                (D.map7 Letter
-                                    (D.field "id" D.string)
-                                    (D.field "from" D.string)
-                                    (D.field "subject" D.string)
-                                    (D.field "body" D.string)
-                                    (D.field "releaseRound" D.int)
-                                    (D.field "sentAt" D.string)
-                                    (D.oneOf
-                                        [ D.field "receivedAt" D.string
-                                        , D.succeed ""
-                                        ]
-                                    )
-                                )
-                            )
-                        )
-                        (D.field "outbox" (D.list outboxDecoder))
-                        (D.field "sent" (D.list sentDecoder))
-                        (D.field "archivedOutbox" (D.list outboxDecoder))
-                        (D.field "archivedSent" (D.list sentDecoder))
-            in
-            case D.decodeValue decoder value of
+            case D.decodeValue stateDecoder value of
                 Ok state ->
                     let
-                        firstDraft =
-                            List.head state.drafts
                         restored =
-                            Maybe.map
-                                (\draft ->
+                            case List.head state.drafts of
+                                Just draft ->
                                     { model
                                         | recipient = draft.recipient
                                         , subject = draft.subject
                                         , body = draft.body
-                                        , releaseHours = draft.releaseHours
-                                        , releaseSeconds = draft.releaseSeconds
+                                        , releaseChoice = coerceChoice model.dev (storedToChoice draft.releaseChoice draft.releaseHours draft.releaseSeconds)
                                     }
-                                )
-                                firstDraft
-                                |> Maybe.withDefault model
+
+                                Nothing ->
+                                    model
                     in
                     ( { restored
                         | contacts = state.contacts
                         , drafts = state.drafts
-                        , sealedEnvelopes = state.sealed
+                        , sealed = List.map decodeSealed state.sealed
                         , inbox = state.inbox
                         , outbox = state.outbox
                         , sent = state.sent
                         , archivedOutbox = state.archivedOutbox
                         , archivedSent = state.archivedSent
-                        , draftEnvelope =
-                            case List.head state.sealed of
-                                Just envelope ->
-                                    envelope
-                                Nothing ->
-                                    ""
-                        , notice = "Saved state restored"
                       }
                     , Cmd.none
                     )
+
                 Err _ ->
                     ( model, Cmd.none )
 
 
 view : Model -> Html Msg
 view model =
-    div [ class "mx-auto min-h-screen max-w-6xl px-4 pb-12 pt-5 md:px-8" ]
-        [ header [ class "mb-6 flex items-center justify-between border-b border-line pb-4" ]
-            [ button
-                [ class "text-left"
-                , onClick ShowDesk
+    case model.phase of
+        Booting ->
+            div [ class "boot" ]
+                [ div []
+                    [ span [ class "sprig", attribute "aria-hidden" "true" ] []
+                    , p [] [ text "Opening the desk…" ]
+                    ]
                 ]
-                [ span [ class "block text-xs font-semibold uppercase tracking-[0.24em] text-gold" ] [ text "Hedwig" ]
-                , h1 [ class "mt-1 font-serif text-3xl text-ink" ] [ text "Private letter desk" ]
-                ]
-            , div [ class "flex items-center gap-2" ]
-                [ button
-                    [ class "rounded-full border border-line px-3 py-2 text-sm text-ink-soft"
-                    , onClick ShowDesk
-                    ]
-                    [ text "Desk" ]
-                , button
-                    [ class "rounded-full border border-line px-3 py-2 text-sm text-ink-soft"
-                    , onClick ShowOwl
-                    ]
-                    [ text "Owl" ]
-                , button
-                    [ class "rounded-full border border-line px-3 py-2 text-sm text-ink-soft"
-                    , onClick ShowCompose
-                    ]
-                    [ text "Compose" ]
-                , button
-                    [ class "rounded-full border border-line px-3 py-2 text-sm text-ink-soft"
-                    , onClick ShowInbox
-                    ]
-                    [ text ("Inbox (" ++ String.fromInt (List.length model.inbox + (if model.draftEnvelope == "" then 0 else 1)) ++ ")") ]
-                , button
-                    [ class "rounded-full border border-line px-3 py-2 text-sm text-ink-soft"
-                    , onClick ShowOutbox
-                    ]
-                    [ text ("Outbox (" ++ String.fromInt (List.length model.outbox) ++ ")") ]
-                , button
-                    [ class "rounded-full border border-line px-3 py-2 text-sm text-ink-soft"
-                    , onClick ShowSent
-                    ]
-                    [ text ("Sent (" ++ String.fromInt (List.length model.sent) ++ ")") ]
-                , button
-                    [ class "rounded-full border border-line px-3 py-2 text-sm text-ink-soft"
-                    , onClick ShowHelp
-                    ]
-                    [ text "Help & FAQ" ]
-                , button
-                    [ class "rounded-full border border-line bg-sheet px-3 py-2 text-sm text-ink"
-                    , onClick ToggleTheme
-                    ]
-                    [ text (if model.theme == "dark" then "Light" else "Dark") ]
-                ]
-            ]
-        , if model.notice /= "" then
-            p [ class "mb-5 rounded-xl border border-line bg-sheet px-4 py-3 text-sm text-ink-soft" ]
-                [ text model.notice ]
-          else
-            text ""
-        , case model.page of
-            Desk ->
-                div []
-                    [ div [ class "grid gap-5 md:grid-cols-2" ]
-                        [ div [ class "rounded-2xl border border-line bg-sheet p-6" ]
-                            [ p [ class "text-xs font-semibold uppercase tracking-widest text-gold" ] [ text "Desk" ]
-                            , h1 [ class "mt-2 font-serif text-4xl text-ink" ] [ text "Ready for post" ]
-                            , p [ class "mt-3 leading-relaxed text-ink-soft" ] [ text ("Signed in as " ++ (if model.name == "" then "My owl" else model.name)) ]
-                            , span [ class "mt-5 inline-block rounded-full border border-line px-3 py-2 text-xs text-ink-soft" ] [ text model.connectionStatus ]
-                            ]
-                        , div [ class "rounded-2xl border border-line bg-sheet p-6" ]
-                            [ p [ class "text-xs font-semibold uppercase tracking-widest text-gold" ] [ text "Quick actions" ]
-                            , div [ class "mt-4 grid gap-3" ]
-                                [ tabButton "Connect another owl" ShowOwl
-                                , tabButton "Write a letter" ShowCompose
-                                , tabButton ("Open inbox (" ++ String.fromInt (List.length model.inbox + (if model.draftEnvelope == "" then 0 else 1)) ++ ")") ShowInbox
-                                , tabButton ("Review outbox (" ++ String.fromInt (List.length model.outbox) ++ ")") ShowOutbox
-                                , tabButton ("Review sent (" ++ String.fromInt (List.length model.sent) ++ ")") ShowSent
-                                ]
+
+        Welcome ->
+            welcome model
+
+        Ready ->
+            div [ class "app" ]
+                [ header [ class "topbar" ]
+                    [ button [ type_ "button", class "brand", onClick (Go Desk) ]
+                        [ span [ class "sprig", attribute "aria-hidden" "true" ] []
+                        , span [ class "brand-copy" ]
+                            [ span [ class "brand-kicker" ] [ text "Ophelia's" ]
+                            , span [ class "brand-title" ] [ text "Rosemaries" ]
                             ]
                         ]
+                    , nav [ class "section-nav", attribute "aria-label" "Sections" ]
+                        [ navButton "Desk" (model.page == Desk) (Go Desk)
+                        , navButton "Write" (model.page == Compose) (Go Compose)
+                        , navButton "Inbox" (model.page == Inbox) (Go Inbox)
+                        , navButton "Pair" (model.page == Pair) (Go Pair)
+                        , moreMenu model
+                        ]
+                    , themeButton model
                     ]
-            Owl ->
-                div [ class "mx-auto max-w-4xl" ]
-                    [ identityCard model
-                    , div [ class "mt-5" ] [ connectionCard model ]
+                , noticeView model.notice
+                , case model.page of
+                    Desk ->
+                        deskHome model
+
+                    Pair ->
+                        pairPage model
+
+                    Compose ->
+                        div [ class "screen" ] [ composer model ]
+
+                    Inbox ->
+                        div [ class "screen" ] [ inboxPage model ]
+
+                    Outbox ->
+                        div [ class "screen" ] [ outboxPage model ]
+
+                    Sent ->
+                        div [ class "screen" ] [ sentPage model ]
+
+                    Help ->
+                        div [ class "screen" ] [ helpPage ]
+                , case model.confirmation of
+                    Nothing ->
+                        text ""
+
+                    Just action ->
+                        confirmationDialog action
+                ]
+
+
+welcome : Model -> Html Msg
+welcome model =
+    div [ class "app" ]
+        [ div [ class "topbar" ]
+            [ span [ class "brand-copy" ]
+                [ span [ class "brand-kicker" ] [ text "Ophelia's" ]
+                , span [ class "brand-title" ] [ text "Rosemaries" ]
+                ]
+            , themeButton model
+            ]
+        , div [ class "welcome" ]
+            [ span [ class "sprig", attribute "aria-hidden" "true" ] []
+            , h1 [] [ text "Welcome" ]
+            , p [ class "lede" ] [ text "Ophelia's Rosemaries is a small desk for letters between two friends." ]
+            , p [ class "lede" ] [ text "You write whenever you like, and seal each letter for a day. It stays closed until that day arrives." ]
+            , p [ class "lede" ] [ text "To pass a letter across, you both need to be here together. There is no mailbox in between." ]
+            , form [ onSubmit SubmitWelcome ]
+                [ label [ class "lbl", for "welcome-name" ] [ text "Your name" ]
+                , input
+                    ([ class "field"
+                     , id "welcome-name"
+                     , type_ "text"
+                     , value model.name
+                     , placeholder "A name they will know"
+                     , attribute "autocomplete" "name"
+                     , onInput NameChanged
+                     ]
+                        ++ described "welcome-name-error" model.nameError
+                    )
+                    []
+                , fieldError "welcome-name-error" model.nameError
+                , div [ class "actions" ]
+                    [ button [ class "btn btn-primary", type_ "submit", disabled model.submitting ]
+                        [ text
+                            (if model.submitting then
+                                "Opening…"
+                             else
+                                "Open my desk"
+                            )
+                        ]
                     ]
-            Compose ->
-                div [ class "mx-auto max-w-3xl" ] [ composerCard model ]
-            Inbox ->
-                div [ class "mx-auto max-w-3xl" ] [ inboxCard model ]
-            Outbox ->
-                div [ class "mx-auto max-w-3xl" ]
-                    [ outboxCard model
-                    , debugLogCard model
-                    ]
-            Sent ->
-                div [ class "mx-auto max-w-3xl" ] [ sentCard model ]
-            Help ->
-                helpPage
-        , case model.confirmation of
-            Nothing ->
+                ]
+            ]
+        ]
+
+
+deskHome : Model -> Html Msg
+deskHome model =
+    let
+        sealedCount =
+            List.length model.sealed
+
+        waitingCount =
+            List.length (List.filter (\item -> item.status /= "sent") model.outbox)
+    in
+    div [ class "home" ]
+        [ span [ class "sprig", attribute "aria-hidden" "true" ] []
+        , p [ class "today" ] [ text (formatDate model.zone model.now) ]
+        , h1 [] [ text (greeting model.zone model.now model.name) ]
+        , p [ class "lede" ] [ text "Write whenever you like. Each letter opens on the day you choose." ]
+        , div [ class "counts" ]
+            [ p [] [ text (sealedSentence sealedCount) ]
+            , if waitingCount == 0 then
                 text ""
-            Just action ->
-                confirmationDialog action
+              else
+                p [] [ text (waitingSentence waitingCount) ]
+            ]
+        , div [ class "actions" ]
+            [ if sealedCount > 0 then
+                button [ type_ "button", class "btn btn-primary", onClick (Go Inbox) ] [ text "Open your letters" ]
+              else
+                button [ type_ "button", class "btn btn-primary", onClick (Go Compose) ] [ text "Write a letter" ]
+            ]
+        ]
+
+
+pairPage : Model -> Html Msg
+pairPage model =
+    div [ class "screen stack" ]
+        [ div []
+            [ h1 [] [ text "Pair with a friend" ]
+            , p [ class "lede" ] [ text "One of you invites. The other joins. Then a letter can cross." ]
+            , p
+                [ class "status-line"
+                , attribute "data-testid" "connection-status"
+                , attribute "data-state" (statusState model.connectionStatus)
+                ]
+                [ text model.connectionStatus ]
+            ]
+        , div [ class "tabs", attribute "role" "tablist", attribute "aria-label" "Pairing" ]
+            [ button
+                [ type_ "button"
+                , class "choice"
+                , id "tab-invite"
+                , attribute "role" "tab"
+                , attribute "aria-selected" (boolAttr (model.pairMode == Invite))
+                , attribute "aria-controls" "panel-invite"
+                , onClick (SetPairMode Invite)
+                ]
+                [ text "Invite a friend" ]
+            , button
+                [ type_ "button"
+                , class "choice"
+                , id "tab-join"
+                , attribute "role" "tab"
+                , attribute "aria-selected" (boolAttr (model.pairMode == Join))
+                , attribute "aria-controls" "panel-join"
+                , onClick (SetPairMode Join)
+                ]
+                [ text "Join a friend" ]
+            ]
+        , div
+            [ id "panel-invite"
+            , attribute "role" "tabpanel"
+            , attribute "aria-labelledby" "tab-invite"
+            , hidden (model.pairMode /= Invite)
+            ]
+            [ inviteFlow model ]
+        , div
+            [ id "panel-join"
+            , attribute "role" "tabpanel"
+            , attribute "aria-labelledby" "tab-join"
+            , hidden (model.pairMode /= Join)
+            ]
+            [ joinFlow model ]
+        , div [ class "row" ]
+            [ button [ type_ "button", class "btn btn-ghost", onClick ResetConnection ] [ text "Reset connection" ]
+            ]
+        , div [ class "card" ]
+            [ button
+                [ type_ "button"
+                , class "btn btn-ghost"
+                , attribute "aria-expanded" (boolAttr model.showDetails)
+                , onClick ToggleDetails
+                ]
+                [ text "Details" ]
+            , if model.showDetails then
+                div []
+                    [ p [ class "meta mono" ]
+                        [ text
+                            (if model.iceDetails == "" then
+                                "No connection notes yet."
+                             else
+                                model.iceDetails
+                            )
+                        ]
+                    , if List.isEmpty model.debugLogs then
+                        p [ class "meta" ] [ text "No recent notes." ]
+                      else
+                        div [ class "log" ] (List.map (\line -> p [ class "mono" ] [ text line ]) model.debugLogs)
+                    , button [ type_ "button", class "btn btn-ghost", onClick ClearDebugLog ] [ text "Clear" ]
+                    ]
+              else
+                text ""
+            ]
+        , identityCard model
+        ]
+
+
+inviteFlow : Model -> Html Msg
+inviteFlow model =
+    div [ class "card" ]
+        [ h2 [] [ text "Invite a friend" ]
+        , p [ class "quiet" ] [ text "Create an invitation, copy it, and send it to them. Their reply comes back here." ]
+        , div [ class "row" ]
+            [ button [ type_ "button", class "btn btn-primary", onClick CreateOffer ] [ text "Create invitation" ]
+            , button [ type_ "button", class "btn btn-ghost", onClick CopyInvitation ] [ text "Copy invitation" ]
+            , if model.copied == "invitation" then
+                span [ class "copied" ] [ text "Copied" ]
+              else
+                text ""
+            ]
+        , label [ class "lbl", for "your-invitation" ] [ text "Your invitation" ]
+        , textarea
+            [ class "field mono"
+            , id "your-invitation"
+            , rows 3
+            , readonly True
+            , value model.createdInvitation
+            , placeholder "Your invitation will appear here"
+            ]
+            []
+        , label [ class "lbl", for "friend-answer" ] [ text "Friend's answer" ]
+        , textarea
+            ([ class "field mono"
+             , id "friend-answer"
+             , rows 3
+             , value model.pastedAnswer
+             , placeholder "Paste your friend's answer"
+             , onInput PastedAnswerChanged
+             ]
+                ++ described "friend-answer-error" model.pairAnswerError
+            )
+            []
+        , fieldError "friend-answer-error" model.pairAnswerError
+        , div [ class "row" ]
+            [ button [ type_ "button", class "btn btn-primary", onClick SetRemoteAnswer ] [ text "Connect" ]
+            ]
+        ]
+
+
+joinFlow : Model -> Html Msg
+joinFlow model =
+    div [ class "card" ]
+        [ h2 [] [ text "Join a friend" ]
+        , p [ class "quiet" ] [ text "Paste the invitation they sent you, then copy your answer back to them." ]
+        , label [ class "lbl", for "friend-invitation" ] [ text "Friend's invitation" ]
+        , textarea
+            ([ class "field mono"
+             , id "friend-invitation"
+             , rows 3
+             , value model.pastedInvitation
+             , placeholder "Paste your friend's invitation"
+             , onInput PastedInvitationChanged
+             ]
+                ++ described "friend-invitation-error" model.pairInviteError
+            )
+            []
+        , fieldError "friend-invitation-error" model.pairInviteError
+        , div [ class "row" ]
+            [ button [ type_ "button", class "btn btn-primary", onClick AcceptOffer ] [ text "Create answer" ]
+            ]
+        , label [ class "lbl", for "your-answer" ] [ text "Your answer" ]
+        , textarea
+            [ class "field mono"
+            , id "your-answer"
+            , rows 3
+            , readonly True
+            , value model.createdAnswer
+            , placeholder "Your answer will appear here"
+            ]
+            []
+        , div [ class "row" ]
+            [ button [ type_ "button", class "btn btn-ghost", onClick CopyAnswer ] [ text "Copy answer" ]
+            , if model.copied == "answer" then
+                span [ class "copied" ] [ text "Copied" ]
+              else
+                text ""
+            ]
         ]
 
 
 identityCard : Model -> Html Msg
 identityCard model =
-    div [ class "rounded-2xl border border-line bg-sheet p-5" ]
-        [ div [ class "flex flex-col gap-4 md:flex-row md:items-end md:justify-between" ]
-            [ div [ class "max-w-sm" ]
-                [ p [ class "text-xs font-semibold uppercase tracking-widest text-gold" ] [ text "This desk" ]
-                , label [ class "mt-2 block text-sm text-ink-soft" ] [ text "Owl name" ]
-                , input
-                    [ class "mt-1 w-full rounded-xl border border-line bg-paper px-3 py-2.5 text-ink"
-                    , value model.name
-                    , placeholder "Alba"
-                    , onInput NameChanged
-                    ]
-                    []
-                ]
-            , div [ class "flex-1 md:max-w-2xl" ]
-                [ p [ class "text-sm text-ink-soft" ] [ text "Share this owl address" ]
-                , div [ class "mt-1 flex items-center gap-2" ]
-                    [ p [ class "min-w-0 flex-1 truncate rounded-xl border border-line bg-paper px-3 py-2.5 font-mono text-xs text-ink" ]
-                        [ text (if model.address == "" then "Creating identity..." else model.address) ]
-                    , button
-                        [ class "shrink-0 rounded-xl border border-line bg-paper px-3 py-2.5 text-sm text-ink"
-                        , onClick CopyAddress
-                        ]
-                        [ text "Copy" ]
-                    , button
-                        [ class "shrink-0 rounded-xl border border-line px-3 py-2.5 text-sm text-ink"
-                        , onClick SaveIdentity
-                        ]
-                        [ text "Save" ]
-                    ]
-                , div [ class "mt-5 grid gap-3 md:grid-cols-2" ]
-                    [ div [ class "rounded-xl border border-line bg-paper p-4" ]
-                        [ p [ class "text-sm font-medium text-ink" ] [ text "Backup this owl" ]
-                        , div [ class "mt-2 flex gap-2" ]
-                            [ button
-                                [ class "rounded-xl border border-line px-3 py-2 text-sm text-ink"
-                                , onClick ExportIdentity
-                                ]
-                                [ text "Create backup" ]
-                            , button
-                                [ class "rounded-xl border border-line px-3 py-2 text-sm text-ink"
-                                , onClick CopyBackup
-                                ]
-                                [ text "Copy backup" ]
-                            , button
-                                [ class "rounded-xl border border-line px-3 py-2 text-sm text-ink"
-                                , onClick DownloadIdentity
-                                ]
-                                [ text "Download" ]
-                            ]
-                        , textarea
-                            [ class "mt-3 min-h-20 w-full rounded-xl border border-line bg-sheet px-3 py-2 font-mono text-xs text-ink"
-                            , rows 4
-                            , value model.identityBackup
-                            ]
-                            []
-                        ]
-                    , div [ class "rounded-xl border border-line bg-paper p-4" ]
-                        [ p [ class "text-sm font-medium text-ink" ] [ text "Restore a backup" ]
-                        , textarea
-                            [ class "mt-2 min-h-20 w-full rounded-xl border border-line bg-sheet px-3 py-2 font-mono text-xs text-ink"
-                            , rows 4
-                            , value model.importBackup
-                            , onInput ImportIdentityChanged
-                            , placeholder "Paste backup JSON"
-                            ]
-                            []
-                        , button
-                            [ class "mt-2 rounded-xl bg-moss px-3 py-2 text-sm text-white"
-                            , onClick RequestIdentityRestore
-                            ]
-                            [ text "Restore owl" ]
-                        , button
-                            [ class "mt-2 ml-2 rounded-xl border border-line px-3 py-2 text-sm text-ink"
-                            , onClick ImportIdentityFile
-                            ]
-                            [ text "Import file" ]
-                        ]
-                    ]
-                ]
+    div [ class "card" ]
+        [ h2 [] [ text "Your desk" ]
+        , label [ class "lbl", for "desk-name" ] [ text "Your name" ]
+        , input
+            ([ class "field"
+             , id "desk-name"
+             , type_ "text"
+             , value model.name
+             , onInput NameChanged
+             ]
+                ++ described "desk-name-error" model.nameError
+            )
+            []
+        , fieldError "desk-name-error" model.nameError
+        , div [ class "row" ]
+            [ button [ type_ "button", class "btn btn-ghost", onClick SaveIdentity ] [ text "Save name" ]
+            ]
+        , p [ class "lbl" ] [ text "Your letter address" ]
+        , p [ class "mono address" ] [ text (if model.address == "" then "Preparing your address…" else model.address) ]
+        , div [ class "row" ]
+            [ button [ type_ "button", class "btn btn-ghost", onClick CopyAddress ] [ text "Copy address" ]
+            , if model.copied == "address" then
+                span [ class "copied" ] [ text "Copied" ]
+              else
+                text ""
+            ]
+        , h2 [ class "today" ] [ text "Keep a backup" ]
+        , p [ class "quiet" ] [ text "This file holds the keys to your desk. Keep it private." ]
+        , div [ class "row" ]
+            [ button [ type_ "button", class "btn btn-ghost", onClick ExportIdentity ] [ text "Create backup" ]
+            , button [ type_ "button", class "btn btn-ghost", onClick CopyBackup ] [ text "Copy backup" ]
+            , button [ type_ "button", class "btn btn-ghost", onClick DownloadIdentity ] [ text "Download" ]
+            ]
+        , textarea
+            [ class "field mono"
+            , rows 4
+            , readonly True
+            , value model.identityBackup
+            ]
+            []
+        , label [ class "lbl", for "restore-json" ] [ text "Backup to restore" ]
+        , textarea
+            [ class "field mono"
+            , id "restore-json"
+            , rows 5
+            , value model.importBackup
+            , placeholder "Paste backup JSON"
+            , onInput ImportIdentityChanged
+            ]
+            []
+        , div [ class "row" ]
+            [ button [ type_ "button", class "btn btn-primary", onClick RequestIdentityRestore ] [ text "Restore backup" ]
+            , button [ type_ "button", class "btn btn-ghost", onClick ImportIdentityFile ] [ text "Import file" ]
             ]
         ]
 
 
-connectionCard : Model -> Html Msg
-connectionCard model =
-    div [ class "rounded-2xl border border-line bg-sheet p-5" ]
-        [ div [ class "flex items-start justify-between gap-3" ]
-            [ div []
-                [ p [ class "text-xs font-semibold uppercase tracking-widest text-gold" ] [ text "Connection" ]
-                , h2 [ class "mt-1 font-serif text-2xl text-ink" ] [ text "Meet another owl" ]
-                ]
-            , span [ class "rounded-full border border-line px-2.5 py-1 text-xs text-ink-soft" ] [ text model.connectionStatus ]
+composer : Model -> Html Msg
+composer model =
+    let
+        found =
+            if model.composeTried then
+                problems model
+            else
+                Problems "" "" ""
+
+        choice =
+            effectiveChoice model
+    in
+    div [ class "card" ]
+        [ h1 [] [ text "Write a letter" ]
+        , p [ class "lede" ] [ text "Seal it for a day. It opens then, and not before." ]
+        , label [ class "lbl", for "friend-name" ] [ text "Their name" ]
+        , input
+            [ class "field"
+            , id "friend-name"
+            , type_ "text"
+            , value model.friendName
+            , placeholder "Sam"
+            , onInput FriendNameChanged
             ]
-        , if model.iceDetails == "" then
+            []
+        , label [ class "lbl", for "their-address" ] [ text "Their address" ]
+        , textarea
+            ([ class "field mono"
+             , id "their-address"
+             , rows 2
+             , value model.recipient
+             , placeholder "owl1…"
+             , attribute "spellcheck" "false"
+             , onInput RecipientChanged
+             ]
+                ++ described "their-address-error" found.recipient
+            )
+            []
+        , fieldError "their-address-error" found.recipient
+        , fieldError "contact-error" model.contactError
+        , div [ class "row" ]
+            [ button [ type_ "button", class "btn btn-ghost", onClick AddRecipientContact ] [ text "Save to contacts" ]
+            , button [ type_ "button", class "btn btn-ghost", onClick SaveDraft ] [ text "Save draft" ]
+            ]
+        , if List.isEmpty model.contacts then
             text ""
           else
-            p [ class "mt-2 font-mono text-xs text-ink-soft" ] [ text model.iceDetails ]
-        , div [ class "mt-5 space-y-4" ]
-            [ div [ class "rounded-xl border border-line bg-paper p-4" ]
-                [ p [ class "text-sm font-semibold text-ink" ] [ text "1. One owl creates the invitation" ]
-                , p [ class "mt-1 text-sm leading-relaxed text-ink-soft" ] [ text "Create and copy the invitation, then send it to the other owl." ]
-                , div [ class "mt-3 flex gap-2" ]
-                    [ button
-                        [ class "rounded-xl bg-moss px-3 py-2 text-sm text-white"
-                        , onClick CreateOffer
-                        ]
-                        [ text "Create invitation" ]
-                    , button
-                        [ class "rounded-xl border border-line px-3 py-2 text-sm text-ink"
-                        , onClick CopyInvitation
-                        ]
-                        [ text "Copy" ]
-                    ]
-                ]
-            , div [ class "rounded-xl border border-line bg-paper p-4" ]
-                [ p [ class "text-sm font-semibold text-ink" ] [ text "2. The other owl joins" ]
-                , p [ class "mt-1 text-sm leading-relaxed text-ink-soft" ] [ text "Paste the invitation, create an answer, and send it back." ]
-                , textarea
-                    [ class "mt-3 min-h-24 w-full rounded-xl border border-line bg-sheet px-3 py-2 font-mono text-xs text-ink"
-                    , rows 4
-                    , value model.invitation
-                    , placeholder "Paste invitation here"
-                    , onInput InvitationChanged
-                    ]
-                    []
-                , div [ class "mt-2 flex flex-wrap gap-2" ]
-                    [ button
-                        [ class "rounded-xl border border-line px-3 py-2 text-sm text-ink"
-                        , onClick AcceptOffer
-                        ]
-                        [ text "Create answer" ]
-                    , button
-                        [ class "rounded-xl border border-line px-3 py-2 text-sm text-ink"
-                        , onClick CopyAnswer
-                        ]
-                        [ text "Copy answer" ]
-                    ]
-                ]
-            , div [ class "rounded-xl border border-line bg-paper p-4" ]
-                [ p [ class "text-sm font-semibold text-ink" ] [ text "3. Finish the connection" ]
-                , p [ class "mt-1 text-sm leading-relaxed text-ink-soft" ] [ text "Paste the answer here on the owl that created the invitation." ]
-                , textarea
-                    [ class "mt-3 min-h-20 w-full rounded-xl border border-line bg-sheet px-3 py-2 font-mono text-xs text-ink"
-                    , rows 3
-                    , value model.answer
-                    , placeholder "Paste answer here"
-                    , onInput AnswerChanged
+            div [ class "chips" ] (List.map contactChip model.contacts)
+        , label [ class "lbl", for "subject" ] [ text "Subject" ]
+        , input
+            ([ class "field"
+             , id "subject"
+             , type_ "text"
+             , value model.subject
+             , placeholder "A small heading"
+             , onInput SubjectChanged
+             ]
+                ++ described "subject-error" found.subject
+            )
+            []
+        , fieldError "subject-error" found.subject
+        , p [ class "lbl" ] [ text "When it opens" ]
+        , div [ class "choices", attribute "role" "group", attribute "aria-label" "When it opens" ]
+            [ choiceButton "Tomorrow morning" (choice == TomorrowMorning) (ChooseRelease TomorrowMorning)
+            , choiceButton "In a few days" (choice == FewDays) (ChooseRelease FewDays)
+            , choiceButton "Next week" (choice == NextWeek) (ChooseRelease NextWeek)
+            , choiceButton "Choose a date" (isCustom choice) (ChooseRelease (CustomDay (customDate choice)))
+            , if model.dev then
+                choiceButton "1 second (test)" (choice == TestSecond) (ChooseRelease TestSecond)
+              else
+                text ""
+            ]
+        , if isCustom choice then
+            div []
+                [ label [ class "lbl", for "open-on" ] [ text "Open on" ]
+                , input
+                    [ class "field"
+                    , id "open-on"
+                    , type_ "date"
+                    , value (customDate choice)
+                    , onInput CustomDateChanged
                     ]
                     []
-                , button
-                    [ class "mt-2 rounded-xl bg-moss px-3 py-2 text-sm text-white"
-                    , onClick SetRemoteAnswer
-                    ]
-                    [ text "Connect" ]
-                , button
-                    [ class "mt-2 ml-2 rounded-xl border border-line px-3 py-2 text-sm text-ink"
-                    , onClick ResetConnection
-                    ]
-                    [ text "Reset connection" ]
                 ]
+          else
+            text ""
+        , fieldError "open-date-error" model.openDateError
+        , p [ class "meta" ] [ text (releaseSummary model.zone model.now choice) ]
+        , label [ class "lbl", for "letter-body" ] [ text "The letter" ]
+        , textarea
+            ([ class "field letter-body"
+             , id "letter-body"
+             , rows 11
+             , value model.body
+             , placeholder "Write as if they will open this on the day you chose."
+             , onInput BodyChanged
+             ]
+                ++ described "letter-body-error" found.body
+            )
+            []
+        , fieldError "letter-body-error" found.body
+        , p [ class "meta" ] [ text "You both need to be connected for it to cross." ]
+        , button [ type_ "button", class "seal-button", onClick PrepareEnvelope ]
+            [ span [ class "seal-wax", attribute "aria-hidden" "true" ]
+                [ span [ class "sprig-on-wax" ] [] ]
+            , span [ class "seal-caption" ] [ text "Seal & send" ]
             ]
         ]
 
 
-composerCard : Model -> Html Msg
-composerCard model =
-    div [ class "rounded-2xl border border-line bg-sheet p-5" ]
-        [ p [ class "text-xs font-semibold uppercase tracking-widest text-gold" ] [ text "New letter" ]
-        , h2 [ class "mt-1 font-serif text-2xl text-ink" ] [ text "Write" ]
-        , label [ class "mt-5 block text-sm font-medium text-ink" ] [ text "Recipient owl address" ]
-        , textarea
-            [ class "mt-1 min-h-16 w-full rounded-xl border border-line bg-paper px-3 py-2 font-mono text-xs text-ink"
-            , rows 3
-            , value model.recipient
-            , placeholder "owl1..."
-            , onInput RecipientChanged
-            ]
-            []
-        , div [ class "mt-2 flex flex-wrap gap-2" ]
-               [ button
-                   [ class "rounded-xl border border-line px-3 py-2 text-xs text-ink"
-                   , onClick AddRecipientContact
-                   ]
-                   [ text "Save recipient" ]
-               , button
-                   [ class "rounded-xl border border-line px-3 py-2 text-xs text-ink"
-                   , onClick SaveDraft
-                   ]
-                   [ text "Save draft" ]
-               ]
-        , if List.isEmpty model.contacts then
-               text ""
+inboxPage : Model -> Html Msg
+inboxPage model =
+    div []
+        [ h1 [] [ text "Inbox" ]
+        , p [ class "lede" ] [ text "Sealed letters wait here until their day." ]
+        , if List.isEmpty model.sealed && List.isEmpty model.inbox then
+            p [ class "quiet" ] [ text "No letters yet. When one arrives, it waits here with its seal until the day you chose." ]
           else
-               div [ class "mt-3 flex flex-wrap gap-2" ]
-                   (List.map contactButton model.contacts)
-        , label [ class "mt-4 block text-sm font-medium text-ink" ] [ text "Subject" ]
-        , input
-            [ class "mt-1 w-full rounded-xl border border-line bg-paper px-3 py-2.5 text-ink"
-            , value model.subject
-            , placeholder "A note"
-            , onInput SubjectChanged
-            ]
-            []
-        , label [ class "mt-4 block text-sm font-medium text-ink" ] [ text "Letter" ]
-        , textarea
-            [ class "mt-1 min-h-52 w-full rounded-xl border border-line bg-paper px-3 py-3 leading-relaxed text-ink"
-            , rows 11
-            , value model.body
-            , placeholder "Write in ink..."
-            , onInput BodyChanged
-            ]
-            []
-        , div [ class "mt-4" ]
-            [ p [ class "text-sm font-medium text-ink" ] [ text "Keep sealed for" ]
-            , div [ class "mt-2 flex flex-wrap gap-2" ]
-                [ button
-                    [ class
-                        ("rounded-full border px-3 py-2 text-sm "
-                            ++ (if model.releaseSeconds == "1" then
-                                    "border-wax bg-wax text-white"
-                                else
-                                    "border-line bg-paper text-ink"
-                               )
-                        )
-                    , onClick (ReleaseSecondsChanged "1")
-                    ]
-                    [ text "1 second (test)" ]
-                , releaseButton model "1" "1 hour"
-                , releaseButton model "24" "Tomorrow"
-                , releaseButton model "168" "One week"
+            text ""
+        , div [ class "stack" ]
+            (List.map (sealedCard model) model.sealed)
+        , div [ class "stack" ]
+            (List.map (openedLetter model.zone) model.inbox)
+        ]
+
+
+sealedCard : Model -> SealedLetter -> Html Msg
+sealedCard model letter =
+    let
+        known =
+            namedContact model.contacts letter.from
+
+        sender =
+            known |> Maybe.withDefault "A friend"
+
+        opening =
+            model.openingKey == letter.raw
+    in
+    div [ class ("card letter-card" ++ (if opening then " is-opening" else "")) ]
+        [ span [ class "wax-dot", attribute "aria-hidden" "true" ] []
+        , p [ class "eyebrow" ] [ text "Sealed" ]
+        , h2 [] [ text ("From " ++ sender) ]
+        , if known == Nothing && letter.from /= "" then
+            p [ class "meta" ] [ text (shortAddress letter.from) ]
+          else
+            text ""
+        , p [ class "meta" ] [ text (opensOn model.zone model.now letter.releaseRound) ]
+        , if opening then
+            p [ class "lede" ] [ text "The seal gives way." ]
+          else
+            text ""
+        , div [ class "row" ]
+            [ button
+                [ type_ "button"
+                , class "btn btn-primary"
+                , disabled opening
+                , onClick (OpenSealed letter.raw)
                 ]
-            ]
-        , div [ class "mt-5 flex items-center justify-between gap-3" ]
-            [ p [ class "text-xs text-ink-soft" ]
                 [ text
-                    (if model.sentEnvelope == "" then
-                        "The peer must be connected now."
+                    (if opening then
+                        "Opening…"
                      else
-                        "Envelope sent directly."
+                        "Open"
                     )
                 ]
-            , button
-                [ class "rounded-xl bg-wax px-5 py-3 text-sm font-semibold text-white"
-                , onClick PrepareEnvelope
-                ]
-                [ text "Seal & send" ]
             ]
         ]
 
 
-releaseButton : Model -> String -> String -> Html Msg
-releaseButton model hours label =
-    button
-        [ class
-            ("rounded-full border px-3 py-2 text-sm "
-                ++ (if model.releaseHours == hours then
-                        "border-moss bg-moss text-white"
-                    else
-                        "border-line bg-paper text-ink"
-                   )
-            )
-        , onClick (ReleaseHoursChanged hours)
+openedLetter : Time.Zone -> Letter -> Html Msg
+openedLetter zone letter =
+    div [ class "card" ]
+        [ h2 [] [ text (if letter.subject == "" then "A letter" else letter.subject) ]
+        , p [ class "meta" ] [ text ("From " ++ (if letter.from == "" then "A friend" else letter.from)) ]
+        , p [ class "meta" ]
+            [ text
+                (humanWhen zone
+                    (if letter.sentAt /= "" then
+                        letter.sentAt
+                     else
+                        letter.receivedAt
+                    )
+                )
+            ]
+        , p [ class "letter-text" ] [ text letter.body ]
         ]
+
+
+outboxPage : Model -> Html Msg
+outboxPage model =
+    div []
+        [ h1 [] [ text "Outbox" ]
+        , p [ class "lede" ] [ text "Letters stay here until they reach your friend." ]
+        , if List.isEmpty model.outbox then
+            p [ class "quiet" ] [ text "Nothing is waiting to go out." ]
+          else
+            div [ class "stack" ] (List.map (outboxItem model.zone) model.outbox)
+        , if List.isEmpty model.outbox then
+            text ""
+          else
+            div [ class "row" ]
+                [ button [ type_ "button", class "btn btn-ghost", onClick RequestOutboxArchive ] [ text "Archive outbox" ]
+                ]
+        , p [ class "meta" ] [ text ("Archived: " ++ String.fromInt (List.length model.archivedOutbox)) ]
+        , div [ class "stack" ] (List.map archivedOutbox model.archivedOutbox)
+        ]
+
+
+outboxItem : Time.Zone -> OutboxItem -> Html Msg
+outboxItem zone item =
+    div [ class "card" ]
+        [ div [ class "row" ]
+            [ h2 [] [ text item.subject ]
+            , span [ class "pill" ] [ text (deliveryLabel item.status) ]
+            ]
+        , p [ class "meta" ]
+            [ text
+                ("To "
+                    ++ (if item.recipientName /= "" then
+                            item.recipientName
+                        else
+                            shortAddress item.recipient
+                       )
+                )
+            ]
+        , p [ class "meta" ] [ text (humanWhen zone item.createdAt) ]
+        , if item.error == "" then
+            text ""
+          else
+            p [ class "field-error" ] [ text item.error ]
+        , if item.status == "failed" || item.status == "pending" then
+            button [ type_ "button", class "btn btn-ghost", onClick (RetryEnvelope item.id) ] [ text "Retry" ]
+          else
+            text ""
+        ]
+
+
+archivedOutbox : OutboxItem -> Html Msg
+archivedOutbox item =
+    div [ class "card" ]
+        [ p [] [ text item.subject ]
+        , div [ class "row" ]
+            [ button [ type_ "button", class "btn btn-ghost", onClick (RestoreOutbox item.id) ] [ text "Restore" ]
+            , button [ type_ "button", class "btn btn-ghost", onClick (DeleteArchivedOutbox item.id) ] [ text "Delete" ]
+            ]
+        ]
+
+
+sentPage : Model -> Html Msg
+sentPage model =
+    div []
+        [ h1 [] [ text "Letters you sent" ]
+        , p [ class "lede" ] [ text "A copy stays on this desk, whether or not it has arrived." ]
+        , if List.isEmpty model.sent then
+            p [ class "quiet" ] [ text "When you seal a letter, the full text remains here." ]
+          else
+            div [ class "stack" ] (List.map (sentLetter model.zone) model.sent)
+        , if List.isEmpty model.sent then
+            text ""
+          else
+            div [ class "row" ]
+                [ button [ type_ "button", class "btn btn-ghost", onClick RequestSentArchive ] [ text "Archive sent letters" ]
+                ]
+        , p [ class "meta" ] [ text ("Archived: " ++ String.fromInt (List.length model.archivedSent)) ]
+        , div [ class "stack" ] (List.map archivedSent model.archivedSent)
+        ]
+
+
+sentLetter : Time.Zone -> SentLetter -> Html Msg
+sentLetter zone letter =
+    div [ class "card" ]
+        [ div [ class "row" ]
+            [ h2 [] [ text letter.subject ]
+            , span [ class "pill" ] [ text (deliveryLabel letter.status) ]
+            ]
+        , p [ class "meta" ] [ text ("To " ++ shortAddress letter.to) ]
+        , p [ class "meta" ]
+            [ text
+                (humanWhen zone
+                    (if letter.sentAtLocal /= "" then
+                        letter.sentAtLocal
+                     else
+                        letter.sentAt
+                    )
+                )
+            ]
+        , p [ class "letter-text" ] [ text letter.body ]
+        ]
+
+
+archivedSent : SentLetter -> Html Msg
+archivedSent letter =
+    div [ class "card" ]
+        [ p [] [ text letter.subject ]
+        , div [ class "row" ]
+            [ button [ type_ "button", class "btn btn-ghost", onClick (RestoreSent letter.id) ] [ text "Restore" ]
+            , button [ type_ "button", class "btn btn-ghost", onClick (DeleteArchivedSent letter.id) ] [ text "Delete" ]
+            ]
+        ]
+
+
+helpPage : Html Msg
+helpPage =
+    div [ class "card" ]
+        [ h1 [] [ text "How letters open" ]
+        , p [ class "lede" ] [ text "A letter stays sealed until the day you chose. Both of you need to be here to pass it across. Nothing waits on a server in between." ]
+        , div [ class "stack" ]
+            [ faq "How do I invite a friend?"
+                "One of you creates an invitation and sends that text to the other. They choose Join a friend, paste it, and send an answer back. Paste that answer and choose Connect."
+            , faq "When can a letter be read?"
+                "Not before the day it was sealed for. The seal is a public time lock, so neither of you can open it early."
+            , faq "Do we both need to be here?"
+                "Yes. The letter passes directly between your two browsers. If it cannot cross yet, it waits in your outbox."
+            , faq "Where do the letters live?"
+                "On this device, in this browser. A backup file holds your desk's keys. Keep that file private."
+            , faq "Does changing my name change my address?"
+                "No. Your name is what a friend sees. The address stays with this browser until you restore a backup."
+            ]
+        , div [ class "row" ]
+            [ button [ type_ "button", class "btn btn-ghost", onClick (Go Desk) ] [ text "Return to desk" ]
+            ]
+        ]
+
+
+faq : String -> String -> Html Msg
+faq question answer =
+    details [ class "fold" ]
+        [ summary [] [ text question ]
+        , p [ class "quiet" ] [ text answer ]
+        ]
+
+
+confirmationDialog : String -> Html Msg
+confirmationDialog action =
+    div [ class "dialog-backdrop", attribute "role" "presentation" ]
+        [ div
+            [ class "dialog-card"
+            , attribute "role" "dialog"
+            , attribute "aria-modal" "true"
+            , attribute "aria-labelledby" "confirm-title"
+            ]
+            [ h2 [ id "confirm-title" ]
+                [ text
+                    (case action of
+                        "restore-identity" ->
+                            "Restore this desk?"
+
+                        "archive-outbox" ->
+                            "Archive the outbox?"
+
+                        "archive-sent" ->
+                            "Archive sent letters?"
+
+                        _ ->
+                            "Continue?"
+                    )
+                ]
+            , p [ class "lede" ]
+                [ text
+                    (case action of
+                        "restore-identity" ->
+                            "This replaces the keys on this desk. Keep a backup somewhere safe."
+
+                        "archive-outbox" ->
+                            "These letters move into the archive on this device."
+
+                        "archive-sent" ->
+                            "These copies move into the archive on this device."
+
+                        _ ->
+                            "Continue with this?"
+                    )
+                ]
+            , div [ class "row" ]
+                [ button [ type_ "button", class "btn btn-ghost", onClick CancelConfirmation ] [ text "Cancel" ]
+                , button [ type_ "button", class "btn btn-primary", onClick ConfirmAction ] [ text "Confirm" ]
+                ]
+            ]
+        ]
+
+
+navButton : String -> Bool -> Msg -> Html Msg
+navButton label current msg =
+    button
+        ([ type_ "button", class "nav-btn", onClick msg ]
+            ++ (if current then
+                    [ attribute "aria-current" "page" ]
+                else
+                    []
+               )
+        )
         [ text label ]
 
 
-contactButton : Contact -> Html Msg
-contactButton contact =
-    button
-        [ class "max-w-full truncate rounded-full border border-line bg-paper px-3 py-2 text-xs text-ink"
-        , onClick (SelectRecipient contact.address)
-        ]
-        [ text contact.name ]
-
-
-inboxCard : Model -> Html Msg
-inboxCard model =
-    div [ class "rounded-2xl border border-line bg-sheet p-5" ]
-        [ p [ class "text-xs font-semibold uppercase tracking-widest text-gold" ] [ text "Inbox" ]
-        , h2 [ class "mt-1 font-serif text-2xl text-ink" ] [ text "Sealed post" ]
-        , if model.draftEnvelope == "" then
-            p [ class "mt-3 text-sm text-ink-soft" ] [ text "No letter waiting to be opened." ]
-          else
-            div [ class "mt-4 rounded-xl border border-line bg-paper p-4" ]
-                [ p [ class "text-sm text-ink-soft" ] [ text "A timed letter arrived from a connected peer." ]
-                , button
-                    [ class "mt-3 rounded-xl bg-moss px-3 py-2 text-sm text-white"
-                    , onClick (DecryptLetter model.draftEnvelope)
-                    ]
-                    [ text "Open when ready" ]
+moreMenu : Model -> Html Msg
+moreMenu model =
+    let
+        current =
+            model.page == Outbox || model.page == Sent || model.page == Help
+    in
+    div [ class "more-menu" ]
+        [ button
+            ([ type_ "button"
+             , class "nav-btn"
+             , attribute "aria-expanded" (boolAttr model.moreOpen)
+             , attribute "aria-controls" "more-panel"
+             , onClick ToggleMore
+             ]
+                ++ (if current then
+                        [ attribute "aria-current" "page" ]
+                    else
+                        []
+                   )
+            )
+            [ text "More" ]
+        , if model.moreOpen then
+            div [ class "more-panel", id "more-panel" ]
+                [ navButton ("Outbox (" ++ String.fromInt (List.length model.outbox) ++ ")") (model.page == Outbox) (Go Outbox)
+                , navButton ("Sent (" ++ String.fromInt (List.length model.sent) ++ ")") (model.page == Sent) (Go Sent)
+                , navButton "Help" (model.page == Help) (Go Help)
                 ]
-        , div [ class "mt-4 space-y-3" ]
-            (List.map receivedLetterView model.inbox)
+          else
+            text ""
         ]
 
 
-receivedLetterView : Letter -> Html Msg
-receivedLetterView letter =
-    div [ class "rounded-xl border border-line bg-paper p-4" ]
-        [ p [ class "text-xs text-gold" ] [ text ("Round " ++ String.fromInt letter.releaseRound) ]
-        , h2 [ class "mt-1 font-serif text-xl text-ink" ] [ text letter.subject ]
-        , p [ class "mt-1 text-xs text-ink-soft" ] [ text ("Received " ++ (if letter.receivedAt == "" then letter.sentAt else letter.receivedAt)) ]
-        , p [ class "mt-2 whitespace-pre-wrap text-sm leading-relaxed text-ink-soft" ] [ text letter.body ]
+themeButton : Model -> Html Msg
+themeButton model =
+    button [ type_ "button", class "btn btn-ghost theme-btn", onClick ToggleTheme ]
+        [ text
+            (if model.theme == "dark" then
+                "Light"
+             else
+                "Dark"
+            )
         ]
 
 
-tabButton : String -> Msg -> Html Msg
-tabButton label msg =
+noticeView : Maybe Notice -> Html Msg
+noticeView maybeNotice =
+    div [ class "notice-slot", attribute "aria-live" "polite" ]
+        [ case maybeNotice of
+            Nothing ->
+                text ""
+
+            Just note ->
+                div
+                    [ class ("notice notice-" ++ toneName note.tone)
+                    , attribute "role"
+                        (if note.tone == Error then
+                            "alert"
+                         else
+                            "status"
+                        )
+                    ]
+                    [ p [] [ text note.text ]
+                    , button [ type_ "button", class "btn", onClick DismissNotice ] [ text "Dismiss" ]
+                    ]
+        ]
+
+
+choiceButton : String -> Bool -> Msg -> Html Msg
+choiceButton label pressed msg =
     button
-        [ class "rounded-xl border border-line bg-paper px-4 py-3 text-left text-sm font-medium text-ink"
+        [ type_ "button"
+        , class "choice"
+        , attribute "aria-pressed" (boolAttr pressed)
         , onClick msg
         ]
         [ text label ]
 
 
-confirmationDialog : String -> Html Msg
-confirmationDialog action =
-    div
-        [ class "dialog-backdrop"
-        , Html.Attributes.attribute "role" "presentation"
-        ]
-        [ div
-            [ class "dialog-card"
-            , Html.Attributes.attribute "role" "dialog"
-            , Html.Attributes.attribute "aria-modal" "true"
-            , Html.Attributes.attribute "aria-labelledby" "confirm-title"
-            ]
-            [ h2 [ class "font-serif text-2xl text-ink", Html.Attributes.id "confirm-title" ]
-                [ text
-                    (case action of
-                        "restore-identity" ->
-                            "Restore this owl?"
-                        "archive-outbox" ->
-                            "Archive the outbox?"
-                        "archive-sent" ->
-                            "Archive sent letters?"
-                        _ ->
-                            "Confirm this action?"
-                    )
-                ]
-            , p [ class "mt-3 text-sm leading-relaxed text-ink-soft" ]
-                [ text
-                    (case action of
-                        "restore-identity" ->
-                            "This replaces the current owl identity. Keep a backup first."
-                        "archive-outbox" ->
-                            "Prepared outbox entries move to the local archive."
-                        "archive-sent" ->
-                            "Full sent-letter copies move to the local archive."
-                        _ ->
-                            "Continue with this action?"
-                    )
-                ]
-            , div [ class "mt-5 flex justify-end gap-2" ]
-                [ button
-                    [ class "rounded-xl border border-line px-4 py-2 text-sm text-ink"
-                    , onClick CancelConfirmation
-                    ]
-                    [ text "Cancel" ]
-                , button
-                    [ class "rounded-xl bg-wax px-4 py-2 text-sm text-white"
-                    , onClick ConfirmAction
-                    ]
-                    [ text "Confirm" ]
-                ]
-            ]
+contactChip : Contact -> Html Msg
+contactChip contact =
+    button [ type_ "button", class "btn btn-ghost chip", onClick (SelectContact contact.address) ]
+        [ text contact.name ]
+
+
+fieldError : String -> String -> Html msg
+fieldError errorId message =
+    if message == "" then
+        text ""
+    else
+        p [ class "field-error", id errorId, attribute "role" "alert" ] [ text message ]
+
+
+described : String -> String -> List (Html.Attribute msg)
+described errorId message =
+    if message == "" then
+        []
+    else
+        [ attribute "aria-describedby" errorId
+        , attribute "aria-invalid" "true"
         ]
 
 
-outboxCard : Model -> Html Msg
-outboxCard model =
-    div [ class "rounded-2xl border border-line bg-sheet p-5" ]
-        [ p [ class "text-xs font-semibold uppercase tracking-widest text-gold" ] [ text "Outbox" ]
-        , h2 [ class "mt-1 font-serif text-2xl text-ink" ] [ text "Delivery status" ]
-        , p [ class "mt-2 text-sm text-ink-soft" ]
-            [ text "Prepared letters remain here until their delivery status changes." ]
-        , if List.isEmpty model.outbox then
-            p [ class "mt-3 text-sm text-ink-soft" ] [ text "No prepared letters." ]
-          else
-            div [ class "mt-5 space-y-3" ]
-                (List.map outboxItemView model.outbox)
-        , if List.isEmpty model.outbox then
-            text ""
-          else
-            button
-                [ class "mt-5 rounded-xl border border-line px-3 py-2 text-sm text-ink"
-                , onClick RequestOutboxArchive
-                ]
-                [ text "Archive outbox" ]
-        , p [ class "mt-4 text-xs text-ink-soft" ]
-            [ text ("Archived: " ++ String.fromInt (List.length model.archivedOutbox)) ]
-        , if List.isEmpty model.archivedOutbox then
-            text ""
-          else
-            div [ class "mt-3 space-y-2" ]
-                (List.map archivedOutboxView model.archivedOutbox)
-        ]
+boolAttr : Bool -> String
+boolAttr flag =
+    if flag then
+        "true"
+    else
+        "false"
 
 
-outboxItemView : OutboxItem -> Html Msg
-outboxItemView item =
-    div [ class "rounded-xl border border-line bg-paper p-4" ]
-        [ div [ class "flex items-center justify-between gap-3" ]
-            [ p [ class "truncate text-sm font-medium text-ink" ] [ text item.subject ]
-            , span [ class "rounded-full border border-line px-2 py-1 text-xs text-ink-soft" ] [ text item.status ]
-            ]
-        , p [ class "mt-2 truncate font-mono text-xs text-ink-soft" ] [ text item.id ]
-        , p [ class "mt-1 break-all font-mono text-xs text-ink-soft" ]
-            [ text
-                ("To "
-                    ++ (if item.recipientName == "" then item.recipient else item.recipientName)
-                    ++ (if item.recipientName == "" then "" else " · " ++ item.recipient)
+toneName : NoticeTone -> String
+toneName tone =
+    case tone of
+        Success ->
+            "success"
+
+        Error ->
+            "error"
+
+        Info ->
+            "info"
+
+
+problems : Model -> Problems
+problems model =
+    let
+        address =
+            String.trim model.recipient
+    in
+    { recipient =
+        if address == "" then
+            "Add your friend's letter address."
+        else if not (looseAddress address) then
+            "That letter address does not look right."
+        else
+            ""
+    , subject =
+        if String.trim model.subject == "" then
+            "Give the letter a subject."
+        else
+            ""
+    , body =
+        if String.trim model.body == "" then
+            "Write a few lines before sealing."
+        else
+            ""
+    }
+
+
+hasProblems : Problems -> Bool
+hasProblems found =
+    found.recipient /= "" || found.subject /= "" || found.body /= ""
+
+
+looseAddress : String -> Bool
+looseAddress address =
+    String.startsWith "owl1" address && String.length address > 20
+
+
+effectiveChoice : Model -> ReleaseChoice
+effectiveChoice model =
+    case model.releaseChoice of
+        TestSecond ->
+            if model.dev then
+                TestSecond
+            else
+                TomorrowMorning
+
+        other ->
+            other
+
+
+choiceKey : ReleaseChoice -> String
+choiceKey choice =
+    case choice of
+        TomorrowMorning ->
+            "tomorrow"
+
+        FewDays ->
+            "few-days"
+
+        NextWeek ->
+            "next-week"
+
+        CustomDay date ->
+            "date:" ++ date
+
+        TestSecond ->
+            "test-second"
+
+
+choiceHours : ReleaseChoice -> String
+choiceHours choice =
+    case choice of
+        FewDays ->
+            "72"
+
+        NextWeek ->
+            "168"
+
+        TestSecond ->
+            "0"
+
+        _ ->
+            "24"
+
+
+choiceSeconds : ReleaseChoice -> String
+choiceSeconds choice =
+    case choice of
+        TestSecond ->
+            "1"
+
+        _ ->
+            "0"
+
+
+storedToChoice : String -> String -> String -> ReleaseChoice
+storedToChoice choice hours seconds =
+    if choice == "test-second" || seconds == "1" then
+        TestSecond
+    else if choice == "few-days" || (choice == "" && hours == "72") then
+        FewDays
+    else if choice == "next-week" || (choice == "" && hours == "168") then
+        NextWeek
+    else if String.startsWith "date:" choice then
+        CustomDay (String.dropLeft 5 choice)
+    else
+        TomorrowMorning
+
+
+coerceChoice : Bool -> ReleaseChoice -> ReleaseChoice
+coerceChoice dev choice =
+    case choice of
+        TestSecond ->
+            if dev then
+                TestSecond
+            else
+                TomorrowMorning
+
+        other ->
+            other
+
+
+isCustom : ReleaseChoice -> Bool
+isCustom choice =
+    case choice of
+        CustomDay _ ->
+            True
+
+        _ ->
+            False
+
+
+customDate : ReleaseChoice -> String
+customDate choice =
+    case choice of
+        CustomDay date ->
+            date
+
+        _ ->
+            ""
+
+
+releaseDelay : Time.Zone -> Time.Posix -> ReleaseChoice -> Result String Delay
+releaseDelay zone now choice =
+    case choice of
+        TestSecond ->
+            Ok { hours = 0, seconds = 1 }
+
+        _ ->
+            Result.map
+                (\millis ->
+                    { hours = toFloat (millis - Time.posixToMillis now) / 3600000
+                    , seconds = 0
+                    }
                 )
-            ]
-        , p [ class "mt-1 text-xs text-ink-soft" ] [ text item.createdAt ]
-        , if item.error /= "" then
-            p [ class "mt-2 text-xs text-wax" ] [ text item.error ]
-          else
-            text ""
-        , if item.status == "failed" || item.status == "pending" then
-            button
-                [ class "mt-3 rounded-xl border border-line px-3 py-2 text-xs text-ink"
-                , onClick (RetryEnvelope item.id)
-                ]
-                [ text "Retry" ]
-          else
-            text ""
-        ]
+                (releaseMillis zone now choice)
 
 
-archivedOutboxView : OutboxItem -> Html Msg
-archivedOutboxView item =
-    div [ class "rounded-xl border border-line bg-paper p-3" ]
-        [ p [ class "text-sm font-medium text-ink" ] [ text item.subject ]
-        , p [ class "mt-1 font-mono text-xs text-ink-soft" ] [ text item.id ]
-        , div [ class "mt-3 flex gap-2" ]
-            [ button
-                [ class "rounded-xl border border-line px-3 py-2 text-xs text-ink"
-                , onClick (RestoreOutbox item.id)
-                ]
-                [ text "Restore" ]
-            , button
-                [ class "rounded-xl border border-line px-3 py-2 text-xs text-wax"
-                , onClick (DeleteArchivedOutbox item.id)
-                ]
-                [ text "Delete" ]
-            ]
-        ]
+releaseSummary : Time.Zone -> Time.Posix -> ReleaseChoice -> String
+releaseSummary zone now choice =
+    case choice of
+        TestSecond ->
+            "Opens a second after you seal it."
+
+        FewDays ->
+            "Opens about three days from now."
+
+        NextWeek ->
+            "Opens about a week from now."
+
+        _ ->
+            case releaseMillis zone now choice of
+                Ok millis ->
+                    "Opens " ++ formatWhen zone (Time.millisToPosix millis) ++ "."
+
+                Err message ->
+                    message
 
 
-sentCard : Model -> Html Msg
-sentCard model =
-    div [ class "rounded-2xl border border-line bg-sheet p-5" ]
-        [ p [ class "text-xs font-semibold uppercase tracking-widest text-gold" ] [ text "Sent" ]
-        , h1 [ class "mt-1 font-serif text-3xl text-ink" ] [ text "Sent letters" ]
-        , p [ class "mt-2 text-sm text-ink-soft" ] [ text "Full copies stay in this browser, separately from delivery status." ]
-        , if List.isEmpty model.sent then
-            p [ class "mt-5 text-sm text-ink-soft" ] [ text "No sent letters yet." ]
-          else
-            div [ class "mt-5 space-y-3" ]
-                (List.map sentLetterView model.sent)
-        , if List.isEmpty model.sent then
-            text ""
-          else
-            button
-                [ class "mt-5 rounded-xl border border-line px-3 py-2 text-sm text-ink"
-                , onClick RequestSentArchive
-                ]
-                [ text "Archive sent letters" ]
-        , p [ class "mt-4 text-xs text-ink-soft" ]
-            [ text ("Archived: " ++ String.fromInt (List.length model.archivedSent)) ]
-        , if List.isEmpty model.archivedSent then
-            text ""
-          else
-            div [ class "mt-3 space-y-2" ]
-                (List.map archivedSentView model.archivedSent)
-        ]
+releaseMillis : Time.Zone -> Time.Posix -> ReleaseChoice -> Result String Int
+releaseMillis zone now choice =
+    let
+        nowMs =
+            Time.posixToMillis now
+    in
+    case choice of
+        TomorrowMorning ->
+            Ok (morningAfter zone now)
+
+        FewDays ->
+            Ok (nowMs + 72 * 3600000)
+
+        NextWeek ->
+            Ok (nowMs + 168 * 3600000)
+
+        TestSecond ->
+            Ok (nowMs + 1000)
+
+        CustomDay date ->
+            morningOn zone now date
 
 
-sentLetterView : SentLetter -> Html Msg
-sentLetterView letter =
-    div [ class "rounded-xl border border-line bg-paper p-4" ]
-        [ div [ class "flex items-start justify-between gap-3" ]
-            [ h2 [ class "font-serif text-xl text-ink" ] [ text letter.subject ]
-            , span [ class "shrink-0 rounded-full border border-line px-2 py-1 text-xs text-ink-soft" ] [ text letter.status ]
-            ]
-        , p [ class "mt-2 break-all font-mono text-xs text-ink-soft" ]
-            [ text ("To " ++ letter.to) ]
-        , p [ class "mt-1 text-xs text-ink-soft" ] [ text ((if letter.sentAtLocal == "" then letter.sentAt else letter.sentAtLocal) ++ " · release round " ++ String.fromInt letter.releaseRound) ]
-        , p [ class "mt-3 whitespace-pre-wrap text-sm leading-relaxed text-ink-soft" ] [ text letter.body ]
-        ]
+morningAfter : Time.Zone -> Time.Posix -> Int
+morningAfter zone now =
+    let
+        ( year, month, day ) =
+            civilFromDays (civilDay zone now + 1)
+    in
+    localWallMillis zone year month day 8 0 0
 
 
-archivedSentView : SentLetter -> Html Msg
-archivedSentView letter =
-    div [ class "rounded-xl border border-line bg-paper p-3" ]
-        [ p [ class "text-sm font-medium text-ink" ] [ text letter.subject ]
-        , p [ class "mt-1 truncate font-mono text-xs text-ink-soft" ] [ text letter.id ]
-        , div [ class "mt-3 flex gap-2" ]
-            [ button
-                [ class "rounded-xl border border-line px-3 py-2 text-xs text-ink"
-                , onClick (RestoreSent letter.id)
-                ]
-                [ text "Restore" ]
-            , button
-                [ class "rounded-xl border border-line px-3 py-2 text-xs text-wax"
-                , onClick (DeleteArchivedSent letter.id)
-                ]
-                [ text "Delete" ]
-            ]
-        ]
+morningOn : Time.Zone -> Time.Posix -> String -> Result String Int
+morningOn zone now raw =
+    case parseDate raw of
+        Nothing ->
+            Err "Choose a date."
+
+        Just ( year, month, day ) ->
+            if daysFromCivil year month day <= civilDay zone now then
+                Err "Choose a later day."
+            else
+                Ok (localWallMillis zone year month day 8 0 0)
 
 
-debugLogCard : Model -> Html Msg
-debugLogCard model =
-    div [ class "mt-5 rounded-2xl border border-line bg-sheet p-5" ]
-        [ div [ class "flex items-center justify-between" ]
-            [ div []
-                [ p [ class "text-xs font-semibold uppercase tracking-widest text-gold" ] [ text "Debug" ]
-                , h2 [ class "mt-1 font-serif text-2xl text-ink" ] [ text "Recent activity" ]
-                ]
-            , button
-                [ class "rounded-xl border border-line px-3 py-2 text-xs text-ink"
-                , onClick ClearDebugLog
-                ]
-                [ text "Clear" ]
-            ]
-        , if List.isEmpty model.debugLogs then
-            p [ class "mt-4 text-sm text-ink-soft" ] [ text "No debug events yet." ]
-          else
-            div [ class "mt-4 max-h-64 overflow-auto rounded-xl border border-line bg-paper p-3" ]
-                (List.map debugLogLine model.debugLogs)
-        ]
+{-| UTC millis of a civil wall-clock time, using the offset in effect then. -}
+localWallMillis : Time.Zone -> Int -> Int -> Int -> Int -> Int -> Int -> Int
+localWallMillis zone year month day hour minute second =
+    let
+        naive =
+            daysFromCivil year month day * 86400000
+                + hour * 3600000
+                + minute * 60000
+                + second * 1000
+
+        resolved guess =
+            let
+                utc =
+                    naive - guess * 60000
+
+                actual =
+                    zoneOffsetMinutes zone (Time.millisToPosix utc)
+            in
+            if actual == guess then
+                utc
+            else
+                let
+                    utcNext =
+                        naive - actual * 60000
+
+                    actualNext =
+                        zoneOffsetMinutes zone (Time.millisToPosix utcNext)
+                in
+                if actualNext == actual then
+                    utcNext
+                else
+                    naive - actualNext * 60000
+    in
+    resolved (zoneOffsetMinutes zone (Time.millisToPosix naive))
 
 
-debugLogLine : String -> Html Msg
-debugLogLine line =
-    p [ class "border-b border-line py-2 font-mono text-xs leading-relaxed text-ink-soft last:border-b-0" ]
-        [ text line ]
+zoneOffsetMinutes : Time.Zone -> Time.Posix -> Int
+zoneOffsetMinutes zone time =
+    civilDay zone time * 1440 + Time.toHour zone time * 60 + Time.toMinute zone time - floorMinutes time
 
 
-helpPage : Html Msg
-helpPage =
-    div [ class "mx-auto max-w-3xl" ]
-        [ div [ class "rounded-2xl border border-line bg-sheet p-6 md:p-8" ]
-            [ p [ class "text-xs font-semibold uppercase tracking-widest text-gold" ] [ text "Help & FAQ" ]
-            , h1 [ class "mt-2 font-serif text-4xl text-ink" ] [ text "How Hedwig works" ]
-            , p [ class "mt-3 max-w-2xl leading-relaxed text-ink-soft" ]
-                [ text "Hedwig is a small, peer-to-peer letter desk. Both owls need to be online at the same time, and there is no message server or offline mailbox." ]
-            , div [ class "mt-7 space-y-3" ]
-                [ faq "How do I connect two owls?"
-                    [ text "Send your owl address to the other person. One owl creates an invitation and sends the code to the other. The second owl creates an answer and sends it back. Paste the answer into the first owl and choose Connect." ]
-                , faq "Does the letter stay in storage?"
-                    [ text "No mailbox keeps copies. After the data channel transfers the encrypted letter, the sender and recipient hold local copies according to their browser state. If you close before transfer, the unsent letter remains a draft only if you have prepared it locally." ]
-                , faq "Can someone read it early?"
-                    [ text "The letter is protected by the recipient’s public key and a drand TLock round. Neither the network nor the sender should be able to open it before the selected round." ]
-                , faq "Why do both peers need to be online?"
-                    [ text "The MVP uses direct WebRTC. There is deliberately no relay server or offline storage. This makes sending feel like a short, old-fashioned encounter." ]
-                , faq "What happens if a connection fails?"
-                    [ text "Try again in the same browser and use STUN-capable networks. Strict firewalls or symmetric NATs may prevent a direct connection. The MVP does not silently route through a TURN server." ]
-                , faq "Is this a finished encrypted messenger?"
-                    [ text "No. This is an MVP for testing identity, timed envelopes, manual signaling, direct transfer, and decryption. Security properties should be independently audited before sensitive use." ]
-                , faq "Does changing my owl name create a new identity?"
-                    [ text "No. Names are labels. Clearing browser storage may remove or replace the local identity key, so copy a backup before relying on it." ]
-                , faq "Where are the keys stored?"
-                    [ text "The MVP stores identity material in local browser storage. Browser profiles and devices do not share identities." ]
-                ]
-            , button
-                [ class "mt-7 rounded-xl border border-line bg-paper px-4 py-2.5 text-sm text-ink"
-                , onClick ShowDesk
-                ]
-                [ text "Return to desk" ]
-            ]
-        ]
+floorMinutes : Time.Posix -> Int
+floorMinutes time =
+    floor (toFloat (Time.posixToMillis time) / 60000)
 
 
-faq : String -> List (Html Msg) -> Html Msg
-faq question answer =
-    details
-        [ class "rounded-xl border border-line bg-paper px-4 py-3" ]
-        [ summary [ class "cursor-pointer text-sm font-semibold text-ink" ] [ text question ]
-        , p [ class "mt-3 leading-relaxed text-sm text-ink-soft" ] answer
-        ]
+normalizeStatus : String -> String -> String
+normalizeStatus previous raw =
+    case raw of
+        "disconnected" ->
+            "Disconnected"
+
+        "closed" ->
+            "Disconnected"
+
+        "new" ->
+            if previous == "" then
+                "Disconnected"
+            else
+                previous
+
+        "connected" ->
+            "Connected"
+
+        "connecting" ->
+            "Connecting…"
+
+        "failed" ->
+            "Could not connect"
+
+        "waiting-for-answer" ->
+            "Waiting for your friend…"
+
+        "waiting-for-peer" ->
+            "Waiting for your friend…"
+
+        _ ->
+            raw
+
+
+statusState : String -> String
+statusState status =
+    case status of
+        "Connected" ->
+            "connected"
+
+        "Waiting for your friend…" ->
+            "waiting"
+
+        "Connecting…" ->
+            "waiting"
+
+        "Could not connect" ->
+            "error"
+
+        _ ->
+            "idle"
+
+
+deliveryLabel : String -> String
+deliveryLabel status =
+    case status of
+        "failed" ->
+            "Not delivered"
+
+        "pending" ->
+            "Waiting to send"
+
+        "sent" ->
+            "Delivered"
+
+        other ->
+            other
+
+
+greeting : Time.Zone -> Time.Posix -> String -> String
+greeting zone now name =
+    let
+        hour =
+            Time.toHour zone now
+
+        hello =
+            if hour < 12 then
+                "Good morning"
+            else if hour < 17 then
+                "Good afternoon"
+            else if hour < 21 then
+                "Good evening"
+            else
+                "Good night"
+    in
+    hello ++ ", " ++ name
+
+
+sealedSentence : Int -> String
+sealedSentence count =
+    case count of
+        0 ->
+            "Nothing is sealed right now."
+
+        1 ->
+            "1 letter is sealed."
+
+        _ ->
+            String.fromInt count ++ " letters are sealed."
+
+
+waitingSentence : Int -> String
+waitingSentence count =
+    case count of
+        1 ->
+            "1 letter is waiting to go out."
+
+        _ ->
+            String.fromInt count ++ " letters are waiting to go out."
+
+
+namedContact : List Contact -> String -> Maybe String
+namedContact contacts address =
+    contacts
+        |> List.filter (\contact -> contact.address == address)
+        |> List.head
+        |> Maybe.map .name
+
+
+shortAddress : String -> String
+shortAddress address =
+    if address == "" then
+        "A friend"
+    else if String.length address <= 18 then
+        address
+    else
+        String.left 8 address ++ "…" ++ String.right 4 address
+
+
+opensOn : Time.Zone -> Time.Posix -> Int -> String
+opensOn zone now round =
+    if round < 1 then
+        "Opens on its day"
+    else
+        let
+            opensMs =
+                1692803367 * 1000 + (round - 1) * 3000
+
+            opens =
+                Time.millisToPosix opensMs
+
+            diff =
+                civilDay zone opens - civilDay zone now
+        in
+        if opensMs <= Time.posixToMillis now then
+            "Ready to open"
+        else if diff <= 0 then
+            "Opens today"
+        else if diff == 1 then
+            "Opens tomorrow"
+        else if diff < 7 then
+            "Opens " ++ weekdayName (Time.toWeekday zone opens)
+        else
+            "Opens " ++ formatDate zone opens
+
+
+humanWhen : Time.Zone -> String -> String
+humanWhen zone raw =
+    case parseIso raw of
+        Just time ->
+            formatWhen zone time
+
+        Nothing ->
+            if raw == "" then
+                "Undated"
+            else
+                raw
+
+
+formatDate : Time.Zone -> Time.Posix -> String
+formatDate zone time =
+    weekdayName (Time.toWeekday zone time)
+        ++ " "
+        ++ String.fromInt (Time.toDay zone time)
+        ++ " "
+        ++ monthName (Time.toMonth zone time)
+        ++ " "
+        ++ String.fromInt (Time.toYear zone time)
+
+
+formatWhen : Time.Zone -> Time.Posix -> String
+formatWhen zone time =
+    formatDate zone time
+        ++ " at "
+        ++ String.padLeft 2 '0' (String.fromInt (Time.toHour zone time))
+        ++ ":"
+        ++ String.padLeft 2 '0' (String.fromInt (Time.toMinute zone time))
+
+
+parseIso : String -> Maybe Time.Posix
+parseIso raw =
+    let
+        trimmed =
+            String.left 19 raw
+    in
+    case String.split "T" trimmed of
+        [ date, time ] ->
+            case ( parseDate date, String.split ":" time ) of
+                ( Just ( year, month, day ), [ hours, minutes, seconds ] ) ->
+                    Maybe.map3
+                        (\hour minute second ->
+                            Time.millisToPosix
+                                (daysFromCivil year month day * 86400000 + hour * 3600000 + minute * 60000 + second * 1000)
+                        )
+                        (String.toInt hours)
+                        (String.toInt minutes)
+                        (String.toInt (String.left 2 seconds))
+
+                _ ->
+                    Nothing
+
+        _ ->
+            Nothing
+
+
+parseDate : String -> Maybe ( Int, Int, Int )
+parseDate value =
+    case String.split "-" value of
+        [ years, months, days ] ->
+            Maybe.map3 (\year month day -> ( year, month, day ))
+                (String.toInt years)
+                (String.toInt months)
+                (String.toInt days)
+
+        _ ->
+            Nothing
+
+
+civilDay : Time.Zone -> Time.Posix -> Int
+civilDay zone time =
+    daysFromCivil (Time.toYear zone time) (monthNumber (Time.toMonth zone time)) (Time.toDay zone time)
+
+
+daysFromCivil : Int -> Int -> Int -> Int
+daysFromCivil year month day =
+    let
+        y =
+            if month <= 2 then
+                year - 1
+            else
+                year
+
+        era =
+            if y >= 0 then
+                y // 400
+            else
+                (y - 399) // 400
+
+        yoe =
+            y - era * 400
+
+        monthAdj =
+            if month > 2 then
+                month - 3
+            else
+                month + 9
+
+        dayOfYear =
+            (153 * monthAdj + 2) // 5 + day - 1
+
+        dayOfEra =
+            yoe * 365 + (yoe // 4) - (yoe // 100) + dayOfYear
+    in
+    era * 146097 + dayOfEra - 719468
+
+
+civilFromDays : Int -> ( Int, Int, Int )
+civilFromDays days =
+    let
+        z =
+            days + 719468
+
+        era =
+            if z >= 0 then
+                z // 146097
+            else
+                (z - 146096) // 146097
+
+        doe =
+            z - era * 146097
+
+        yoe =
+            (doe - (doe // 1460) + (doe // 36524) - (doe // 146096)) // 365
+
+        y =
+            yoe + era * 400
+
+        doy =
+            doe - (365 * yoe + (yoe // 4) - (yoe // 100))
+
+        mp =
+            (5 * doy + 2) // 153
+
+        day =
+            doy - ((153 * mp + 2) // 5) + 1
+
+        month =
+            if mp < 10 then
+                mp + 3
+            else
+                mp - 9
+
+        year =
+            if month <= 2 then
+                y + 1
+            else
+                y
+    in
+    ( year, month, day )
+
+
+monthNumber : Time.Month -> Int
+monthNumber month =
+    case month of
+        Time.Jan ->
+            1
+
+        Time.Feb ->
+            2
+
+        Time.Mar ->
+            3
+
+        Time.Apr ->
+            4
+
+        Time.May ->
+            5
+
+        Time.Jun ->
+            6
+
+        Time.Jul ->
+            7
+
+        Time.Aug ->
+            8
+
+        Time.Sep ->
+            9
+
+        Time.Oct ->
+            10
+
+        Time.Nov ->
+            11
+
+        Time.Dec ->
+            12
+
+
+monthName : Time.Month -> String
+monthName month =
+    case month of
+        Time.Jan ->
+            "January"
+
+        Time.Feb ->
+            "February"
+
+        Time.Mar ->
+            "March"
+
+        Time.Apr ->
+            "April"
+
+        Time.May ->
+            "May"
+
+        Time.Jun ->
+            "June"
+
+        Time.Jul ->
+            "July"
+
+        Time.Aug ->
+            "August"
+
+        Time.Sep ->
+            "September"
+
+        Time.Oct ->
+            "October"
+
+        Time.Nov ->
+            "November"
+
+        Time.Dec ->
+            "December"
+
+
+weekdayName : Time.Weekday -> String
+weekdayName day =
+    case day of
+        Time.Mon ->
+            "Monday"
+
+        Time.Tue ->
+            "Tuesday"
+
+        Time.Wed ->
+            "Wednesday"
+
+        Time.Thu ->
+            "Thursday"
+
+        Time.Fri ->
+            "Friday"
+
+        Time.Sat ->
+            "Saturday"
+
+        Time.Sun ->
+            "Sunday"
+
+
+hashFor : Page -> String
+hashFor page =
+    case page of
+        Desk ->
+            "#desk"
+
+        Compose ->
+            "#write"
+
+        Inbox ->
+            "#inbox"
+
+        Pair ->
+            "#pair"
+
+        Outbox ->
+            "#outbox"
+
+        Sent ->
+            "#sent"
+
+        Help ->
+            "#help"
+
+
+pageFromHash : String -> Page
+pageFromHash location =
+    if String.contains "#help" location then
+        Help
+    else if String.contains "#outbox" location then
+        Outbox
+    else if String.contains "#sent" location then
+        Sent
+    else if String.contains "#compose" location || String.contains "#write" location then
+        Compose
+    else if String.contains "#inbox" location then
+        Inbox
+    else if String.contains "#owl" location || String.contains "#pair" location then
+        Pair
+    else
+        Desk
+
+
+letterDecoder : D.Decoder Letter
+letterDecoder =
+    D.map7 Letter
+        (D.field "id" D.string)
+        (D.field "from" D.string)
+        (D.field "subject" D.string)
+        (D.field "body" D.string)
+        (D.field "releaseRound" D.int)
+        (D.field "sentAt" D.string)
+        (D.oneOf [ D.field "receivedAt" D.string, D.succeed "" ])
+
+
+decodeSealed : String -> SealedLetter
+decodeSealed raw =
+    case
+        D.decodeString
+            (D.map3 (\fromAddress round received -> SealedLetter raw fromAddress round received)
+                (D.oneOf [ D.field "from" D.string, D.succeed "" ])
+                (D.oneOf [ D.field "releaseRound" D.int, D.succeed 0 ])
+                (D.oneOf [ D.field "receivedAt" D.string, D.succeed "" ])
+            )
+            raw
+    of
+        Ok letter ->
+            letter
+
+        Err _ ->
+            SealedLetter raw "" 0 ""
+
+
+stateDecoder : D.Decoder LoadedState
+stateDecoder =
+    D.map8 LoadedState
+        (D.field "contacts" (D.list contactDecoder))
+        (D.field "drafts" (D.list draftDecoder))
+        (D.field "sealed" (D.list D.string))
+        (D.field "opened" (D.list letterDecoder))
+        (D.field "outbox" (D.list outboxDecoder))
+        (D.field "sent" (D.list sentDecoder))
+        (D.field "archivedOutbox" (D.list outboxDecoder))
+        (D.field "archivedSent" (D.list sentDecoder))
+
+
+type alias LoadedState =
+    { contacts : List Contact
+    , drafts : List Draft
+    , sealed : List String
+    , inbox : List Letter
+    , outbox : List OutboxItem
+    , sent : List SentLetter
+    , archivedOutbox : List OutboxItem
+    , archivedSent : List SentLetter
+    }
+
+
+contactDecoder : D.Decoder Contact
+contactDecoder =
+    D.map2 Contact
+        (D.field "name" D.string)
+        (D.field "address" D.string)
+
+
+draftDecoder : D.Decoder Draft
+draftDecoder =
+    D.map6 Draft
+        (D.field "recipient" D.string)
+        (D.field "subject" D.string)
+        (D.field "body" D.string)
+        (D.field "releaseHours" D.string)
+        (D.field "releaseSeconds" D.string)
+        (D.oneOf [ D.field "releaseChoice" D.string, D.succeed "" ])
+
+
+outboxDecoder : D.Decoder OutboxItem
+outboxDecoder =
+    D.map8 OutboxItem
+        (D.field "id" D.string)
+        (D.field "subject" D.string)
+        (D.oneOf [ D.field "recipient" D.string, D.succeed "" ])
+        (D.oneOf [ D.field "recipientName" D.string, D.succeed "" ])
+        (D.field "status" D.string)
+        (D.field "envelope" D.string)
+        (D.field "createdAt" D.string)
+        (D.field "error" D.string)
+
+
+sentDecoder : D.Decoder SentLetter
+sentDecoder =
+    D.map8 SentLetter
+        (D.field "id" D.string)
+        (D.field "to" D.string)
+        (D.field "subject" D.string)
+        (D.field "body" D.string)
+        (D.field "releaseRound" D.int)
+        (D.field "sentAt" D.string)
+        (D.field "status" D.string)
+        (D.oneOf [ D.field "sentAtLocal" D.string, D.succeed "" ])

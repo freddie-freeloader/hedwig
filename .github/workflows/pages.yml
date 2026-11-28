@@ -1,4 +1,4 @@
-name: Deploy Hedwig to GitHub Pages
+name: Deploy Ophelia's Rosemaries to GitHub Pages
 
 on:
   push:

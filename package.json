@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Peer-to-peer, end-to-end encrypted letters you can open once a day.",
+  "description": "Letters between friends that stay sealed until the day they open.",
   "packageManager": "pnpm@12.9.0",
   "scripts": {
     "dev": "vite --port 4731 --strictPort",

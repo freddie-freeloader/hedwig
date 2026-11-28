@@ -4,6 +4,8 @@ declare module '*.elm' {
       themeChanged: {
         subscribe: (callback: (theme: string) => void) => void
       }
+      navigateHash: { subscribe: (callback: (hash: string) => void) => void }
+      hashChanged: { send: (hash: string) => void }
       copyText: { subscribe: (callback: (payload: string) => void) => void }
       initializeIdentity: { send: (payload: { name: string }) => void }
       createOffer: { send: (payload: null) => void }

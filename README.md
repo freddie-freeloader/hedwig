@@ -1,11 +1,15 @@
-# Hedwig
+# Ophelia's Rosemaries
 
-Hedwig is a static, peer-to-peer letter desk built with Elm and a small
-TypeScript browser bridge. It uses manual WebRTC signaling, Ed25519/X25519
-keys, and drand TLock to send letters that cannot be opened before a selected
-round.
+Ophelia's Rosemaries is a quiet desk for letters between two friends. Rosemary
+is for remembrance: you write whenever you like, seal a letter for a chosen
+day, and it stays closed until that day arrives.
 
-Both peers need to be online at the same time. The MVP has no relay, mailbox,
+It is a static, peer-to-peer page built with Elm and a small TypeScript browser
+bridge. Manual WebRTC signaling, Ed25519/X25519 keys, and drand TLock keep a
+letter unreadable before the time you chose. Letter addresses still begin with
+`owl1`. The repository name remains `hedwig`.
+
+Both friends need to be online at the same time. The MVP has no relay, mailbox,
 signaling server, account system, or offline delivery queue.
 
 ## Try locally
@@ -32,17 +36,18 @@ pnpm build
 
 ## Send a letter
 
-1. Open Hedwig in two browser profiles or tabs.
-2. Copy the owl address from each desk.
-3. One owl creates an invitation and sends its code to the other owl.
-4. The other owl pastes the invitation and creates an answer.
-5. Send the answer back to the owl that created the invitation.
-6. Paste the answer into the first owl and choose **Connect**.
-7. Enter the recipient owl address, subject, letter, and release duration.
-8. Choose **Seal & send**.
+1. Open Ophelia's Rosemaries in two browser profiles or tabs.
+2. Each person gives the desk a name on the welcome screen.
+3. Copy the letter address from **Pair**.
+4. One person chooses **Invite a friend**, creates an invitation, and sends that text across.
+5. The other chooses **Join a friend**, pastes the invitation, and creates an answer.
+6. Send the answer back. Paste it on the inviting desk and choose **Connect**.
+7. Write the subject and letter, and choose when it opens.
+8. Press the wax seal, **Seal & send**.
 
 Both tabs must remain connected until the transfer is complete. A
-`1 second (test)` release preset is available for development.
+`1 second (test)` release preset is available when the page is opened with
+`?dev=1`.
 
 ## Architecture
 
@@ -52,7 +57,7 @@ flowchart LR
   bridge[TypeScript browser bridge]
   rtc[WebRTC data channel]
   drand[Drand TLock]
-  peer[Second owl]
+  peer[Second desk]
 
   elm <-->|typed ports| bridge
   bridge --> rtc
@@ -64,7 +69,7 @@ flowchart LR
 
 Elm owns the desk UI and application state:
 
-- owl name and address display;
+- your name and letter address;
 - manual invitation and answer state;
 - letter composer;
 - release preset selection;
@@ -98,7 +103,7 @@ the drand library rejects seconds as timestamps and pre-genesis values.
 
 The letter is protected by two layers:
 
-- X25519: only the named recipient owl can decrypt the letter.
+- X25519: only the named friend can decrypt the letter.
 - TLock: the ciphertext cannot be opened before the selected drand round.
 - Ed25519: the sender signs the envelope metadata.
 
@@ -117,7 +122,7 @@ mailbox or retry server.
 
 ## Debugging
 
-The desk includes a **Recent activity** panel showing:
+The desk includes a collapsed **Details** toggle on the pairing screen showing:
 
 - identity creation or restore;
 - ICE gathering;
@@ -128,7 +133,7 @@ The desk includes a **Recent activity** panel showing:
 - application delivery confirmations;
 - errors.
 
-The same events are written to the browser console with `[Hedwig]`.
+The same events are written to the browser console with `[Rosemaries]`.
 
 ## GitHub Pages
 
@@ -168,13 +173,13 @@ Coverage currently includes:
 - the 1-second release preset;
 - dark-mode default;
 - theme switching;
-- Help & FAQ rendering;
-- clear errors for invalid sends.
+- the welcome screen and mobile section tabs;
+- clear field errors for invalid sends.
 
 ## Security and operational boundaries
 
 - Identity backup data contains private Ed25519 and X25519 keys. Anyone who
-  obtains the file can impersonate the owl and decrypt letters addressed to it.
+  obtains the file can impersonate the desk and decrypt letters addressed to it.
 - Browser local storage does not provide hardware-backed secrecy. Clearing,
   copying, or malicious script access can affect identity and saved mail.
 - WebRTC peers and STUN can observe connection metadata and IP addresses.
