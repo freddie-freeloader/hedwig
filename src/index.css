@@ -637,14 +637,18 @@ textarea.field {
   position: fixed;
   inset: 0;
   z-index: 40;
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: safe center;
+  justify-content: safe center;
   padding: 1rem;
+  overflow: auto;
   background: rgba(16, 22, 18, 0.48);
 }
 
 .dialog-card {
   width: min(32rem, 100%);
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
   padding: 1.3rem 1.25rem 1.2rem;
   border-radius: 1.25rem;
   background: var(--color-sheet);

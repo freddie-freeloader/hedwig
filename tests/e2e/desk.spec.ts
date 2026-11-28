@@ -67,6 +67,26 @@ test('hides the one second release outside dev mode', async ({ page }) => {
   await expect(page.getByRole('button', { name: '1 second (test)' })).toHaveCount(0)
 })
 
+test('keeps tomorrow morning at 08:00 across the spring change', async ({ browser }) => {
+  const context = await browser.newContext({ timezoneId: 'America/New_York' })
+  const page = await context.newPage()
+  await page.clock.install({ time: new Date('2026-03-07T17:00:00.000Z') })
+  await openDesk(page)
+  await page.getByRole('button', { name: 'Write', exact: true }).click()
+  await expect(page.getByText('Opens Sunday 8 March 2026 at 08:00.')).toBeVisible()
+  await context.close()
+})
+
+test('keeps the chosen morning at 08:00 across the fall change', async ({ browser }) => {
+  const context = await browser.newContext({ timezoneId: 'America/New_York' })
+  const page = await context.newPage()
+  await page.clock.install({ time: new Date('2026-10-31T16:00:00.000Z') })
+  await openDesk(page)
+  await page.getByRole('button', { name: 'Write', exact: true }).click()
+  await expect(page.getByText('Opens Sunday 1 November 2026 at 08:00.')).toBeVisible()
+  await context.close()
+})
+
 test('offers the 1-second test release preset in dev mode', async ({ page }) => {
   await openDesk(page, '/?dev=1')
   await page.getByRole('button', { name: 'Write', exact: true }).click()
@@ -191,8 +211,8 @@ test('connects two browser contexts by manual WebRTC signaling', async ({ browse
 
   await senderPage.getByLabel("Friend's answer").fill(answerText)
   await senderPage.getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect.poll(async () => senderPage.getByTestId('connection-status').innerText(), { timeout: 20_000 }).toMatch(/^(Connecting…|Connected|Could not connect)$/)
-  await expect(answer).not.toBeEmpty()
+  await expect.poll(async () => senderPage.getByTestId('connection-status').innerText(), { timeout: 30_000 }).toBe('Connected')
+  await expect.poll(async () => recipientPage.getByTestId('connection-status').innerText(), { timeout: 30_000 }).toBe('Connected')
 
   await recipient.close()
   await sender.close()

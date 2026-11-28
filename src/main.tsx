@@ -6,6 +6,7 @@ import '@fontsource/outfit/500.css'
 import '@fontsource/outfit/600.css'
 import { Elm } from './Main.elm'
 import { HedwigBridge } from './bridge.ts'
+import { timezoneFlags } from './localTime.ts'
 import './index.css'
 
 const root = document.getElementById('root')
@@ -24,7 +25,7 @@ const app = Elm.Main.init({
     location: window.location.href,
     theme,
     now: Date.now(),
-    tzOffset: -new Date().getTimezoneOffset(),
+    ...timezoneFlags(Date.now()),
   },
 })
 

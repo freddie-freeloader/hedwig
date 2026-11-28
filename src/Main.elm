@@ -55,6 +55,7 @@ type alias Flags =
     , theme : String
     , now : Int
     , tzOffset : Int
+    , tzEras : List { start : Int, offset : Int }
     }
 
 
@@ -300,7 +301,7 @@ init flags =
       , phase = Booting
       , theme = if flags.theme == "light" then "light" else "dark"
       , dev = String.contains "dev=1" flags.location
-      , zone = Time.customZone flags.tzOffset []
+      , zone = Time.customZone flags.tzOffset (List.reverse (List.sortBy .start flags.tzEras))
       , now = Time.millisToPosix flags.now
       , name = ""
       , address = ""
@@ -351,7 +352,8 @@ init flags =
 subscriptions : Model -> Sub Msg
 subscriptions _ =
     Sub.batch
-        [ identityLoaded IdentityResult
+        [ Time.every 10000 GotNow
+        , identityLoaded IdentityResult
         , offerCreated OfferResult
         , answerCreated AnswerResult
         , connectionStatus ConnectionResult
@@ -1331,6 +1333,7 @@ composer model =
           else
             text ""
         , fieldError "open-date-error" model.openDateError
+        , p [ class "meta" ] [ text (releaseSummary model.zone model.now choice) ]
         , label [ class "lbl", for "letter-body" ] [ text "The letter" ]
         , textarea
             ([ class "field letter-body"
@@ -1904,58 +1907,129 @@ customDate choice =
 releaseDelay : Time.Zone -> Time.Posix -> ReleaseChoice -> Result String Delay
 releaseDelay zone now choice =
     case choice of
-        TomorrowMorning ->
-            Ok { hours = hoursUntilNextMorning zone now, seconds = 0 }
-
-        FewDays ->
-            Ok { hours = 72, seconds = 0 }
-
-        NextWeek ->
-            Ok { hours = 168, seconds = 0 }
-
         TestSecond ->
             Ok { hours = 0, seconds = 1 }
 
-        CustomDay date ->
-            Result.map (\hours -> { hours = hours, seconds = 0 }) (hoursUntilDate zone now date)
+        _ ->
+            Result.map
+                (\millis ->
+                    { hours = toFloat (millis - Time.posixToMillis now) / 3600000
+                    , seconds = 0
+                    }
+                )
+                (releaseMillis zone now choice)
 
 
-hoursUntilNextMorning : Time.Zone -> Time.Posix -> Float
-hoursUntilNextMorning zone now =
+releaseSummary : Time.Zone -> Time.Posix -> ReleaseChoice -> String
+releaseSummary zone now choice =
+    case choice of
+        TestSecond ->
+            "Opens a second after you seal it."
+
+        FewDays ->
+            "Opens about three days from now."
+
+        NextWeek ->
+            "Opens about a week from now."
+
+        _ ->
+            case releaseMillis zone now choice of
+                Ok millis ->
+                    "Opens " ++ formatWhen zone (Time.millisToPosix millis) ++ "."
+
+                Err message ->
+                    message
+
+
+releaseMillis : Time.Zone -> Time.Posix -> ReleaseChoice -> Result String Int
+releaseMillis zone now choice =
     let
-        elapsed =
-            Time.toHour zone now * 3600 + Time.toMinute zone now * 60 + Time.toSecond zone now
+        nowMs =
+            Time.posixToMillis now
     in
-    toFloat (86400 - elapsed + 8 * 3600) / 3600
+    case choice of
+        TomorrowMorning ->
+            Ok (morningAfter zone now)
+
+        FewDays ->
+            Ok (nowMs + 72 * 3600000)
+
+        NextWeek ->
+            Ok (nowMs + 168 * 3600000)
+
+        TestSecond ->
+            Ok (nowMs + 1000)
+
+        CustomDay date ->
+            morningOn zone now date
 
 
-hoursUntilDate : Time.Zone -> Time.Posix -> String -> Result String Float
-hoursUntilDate zone now raw =
+morningAfter : Time.Zone -> Time.Posix -> Int
+morningAfter zone now =
+    let
+        ( year, month, day ) =
+            civilFromDays (civilDay zone now + 1)
+    in
+    localWallMillis zone year month day 8 0 0
+
+
+morningOn : Time.Zone -> Time.Posix -> String -> Result String Int
+morningOn zone now raw =
     case parseDate raw of
         Nothing ->
             Err "Choose a date."
 
         Just ( year, month, day ) ->
-            let
-                todayNum =
-                    civilDay zone now
-
-                targetNum =
-                    daysFromCivil year month day
-
-                diff =
-                    targetNum - todayNum
-
-                elapsed =
-                    Time.toHour zone now * 3600 + Time.toMinute zone now * 60 + Time.toSecond zone now
-
-                seconds =
-                    diff * 86400 - elapsed + 8 * 3600
-            in
-            if diff < 1 then
+            if daysFromCivil year month day <= civilDay zone now then
                 Err "Choose a later day."
             else
-                Ok (toFloat seconds / 3600)
+                Ok (localWallMillis zone year month day 8 0 0)
+
+
+{-| UTC millis of a civil wall-clock time, using the offset in effect then. -}
+localWallMillis : Time.Zone -> Int -> Int -> Int -> Int -> Int -> Int -> Int
+localWallMillis zone year month day hour minute second =
+    let
+        naive =
+            daysFromCivil year month day * 86400000
+                + hour * 3600000
+                + minute * 60000
+                + second * 1000
+
+        resolved guess =
+            let
+                utc =
+                    naive - guess * 60000
+
+                actual =
+                    zoneOffsetMinutes zone (Time.millisToPosix utc)
+            in
+            if actual == guess then
+                utc
+            else
+                let
+                    utcNext =
+                        naive - actual * 60000
+
+                    actualNext =
+                        zoneOffsetMinutes zone (Time.millisToPosix utcNext)
+                in
+                if actualNext == actual then
+                    utcNext
+                else
+                    naive - actualNext * 60000
+    in
+    resolved (zoneOffsetMinutes zone (Time.millisToPosix naive))
+
+
+zoneOffsetMinutes : Time.Zone -> Time.Posix -> Int
+zoneOffsetMinutes zone time =
+    civilDay zone time * 1440 + Time.toHour zone time * 60 + Time.toMinute zone time - floorMinutes time
+
+
+floorMinutes : Time.Posix -> Int
+floorMinutes time =
+    floor (toFloat (Time.posixToMillis time) / 60000)
 
 
 normalizeStatus : String -> String -> String
@@ -2222,6 +2296,51 @@ daysFromCivil year month day =
             yoe * 365 + (yoe // 4) - (yoe // 100) + dayOfYear
     in
     era * 146097 + dayOfEra - 719468
+
+
+civilFromDays : Int -> ( Int, Int, Int )
+civilFromDays days =
+    let
+        z =
+            days + 719468
+
+        era =
+            if z >= 0 then
+                z // 146097
+            else
+                (z - 146096) // 146097
+
+        doe =
+            z - era * 146097
+
+        yoe =
+            (doe - (doe // 1460) + (doe // 36524) - (doe // 146096)) // 365
+
+        y =
+            yoe + era * 400
+
+        doy =
+            doe - (365 * yoe + (yoe // 4) - (yoe // 100))
+
+        mp =
+            (5 * doy + 2) // 153
+
+        day =
+            doy - ((153 * mp + 2) // 5) + 1
+
+        month =
+            if mp < 10 then
+                mp + 3
+            else
+                mp - 9
+
+        year =
+            if month <= 2 then
+                y + 1
+            else
+                y
+    in
+    ( year, month, day )
 
 
 monthNumber : Time.Month -> Int
