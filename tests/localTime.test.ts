@@ -29,4 +29,13 @@ describe('timezone eras', () => {
     expect(offsetFromEras(tzOffset, tzEras, springMorning)).toBe(after)
     expect(after - before).toBe(60)
   })
+
+  it('uses the new offset from the exact transition minute', () => {
+    const now = Date.parse('2026-06-15T16:00:00.000Z')
+    const { tzOffset, tzEras } = timezoneFlags(now)
+    for (const era of tzEras) {
+      const startMinute = era.start * 60_000
+      expect(offsetFromEras(tzOffset, tzEras, startMinute)).toBe(offsetMinutes(startMinute))
+    }
+  })
 })

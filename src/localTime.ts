@@ -14,7 +14,7 @@ const MINUTE_MS = 60 * 1000
 const HOUR_MS = 60 * MINUTE_MS
 const DAY_MS = 24 * HOUR_MS
 
-/** Minutes east of UTC, matching `Date#getTimezoneOffset` and Elm's `Zone`. */
+/** Minutes east of UTC, negated from `Date#getTimezoneOffset` for Elm's `Zone`. */
 export function offsetMinutes(atMs: number): number {
   return -new Date(atMs).getTimezoneOffset()
 }
@@ -41,7 +41,8 @@ export function timezoneFlags(nowMs: number): TimezoneFlags {
       if (offsetMinutes(mid) === offset) low = mid
       else high = mid
     }
-    transitions.push({ start: Math.floor(high / MINUTE_MS), offset: next })
+    // Elm's era lookup uses a strict comparison, so begin one minute earlier.
+    transitions.push({ start: Math.floor(high / MINUTE_MS) - 1, offset: next })
     offset = next
   }
 
